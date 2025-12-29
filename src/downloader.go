@@ -1,18 +1,48 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"github.com/cavaliergopher/grab/v3"
-	"github.com/tidwall/gjson"
-	"go.senan.xyz/taglib"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/cavaliergopher/grab/v3"
+	"github.com/tidwall/gjson"
+	"go.senan.xyz/taglib"
 )
+
+type ConfigMisc struct {
+	CompleteDir            string `json:"complete_dir"`
+	EnableTVSorting        bool   `json:"enable_tv_sorting"`
+	EnableMovieSorting     bool   `json:"enable_movie_sorting"`
+	PreCheck               bool   `json:"pre_check"`
+	HistoryRetention       string `json:"history_retention"`
+	HistoryRetentionOption string `json:"history_retention_option"`
+}
+
+type ConfigCategory struct {
+	Name     string `json:"name"`
+	Pp       string `json:"pp"`
+	Script   string `json:"script"`
+	Dir      string `json:"dir"`
+	Priority int    `json:"priority"`
+}
+
+type Config struct {
+	Misc       ConfigMisc       `json:"misc"`
+	Categories []ConfigCategory `json:"categories"`
+	Sorters    []interface{}    `json:"sorters"`
+}
+
+type ConfigResponse struct {
+	Config Config `json:"config"`
+}
 
 type File struct {
 	Id           int
@@ -75,28 +105,29 @@ func handleDownloaderRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func get_config(w http.ResponseWriter, u url.URL) {
-	w.Write([]byte(`{
-	    "config": {
-	        "misc": {
-	            "complete_dir": "` + DownloadPath + `/complete",
-	            "enable_tv_sorting": false,
-	            "enable_movie_sorting": false,
-	            "pre_check": false,
-	            "history_retention": "",
-	            "history_retention_option": "all"
-	        },
-	        "categories": [
-	            {
-	                "name": "music",
-	                "pp": "",
-	                "script": "Default",
-	                "dir": "` + DownloadPath + `/incomplete/music",
-	                "priority": -100
-	            },
-	        ],
-	        "sorters": []
-	    }
-	}`))
+	resp := ConfigResponse{
+		Config: Config{
+			Misc: ConfigMisc{
+				CompleteDir:            filepath.Join(DownloadPath, "complete"),
+				EnableTVSorting:        false,
+				EnableMovieSorting:     false,
+				PreCheck:               false,
+				HistoryRetention:       "",
+				HistoryRetentionOption: "all",
+			},
+			Categories: []ConfigCategory{
+				{
+					Name:     "music",
+					Pp:       "",
+					Script:   "Default",
+					Dir:      filepath.Join(DownloadPath, "incomplete", "music"),
+					Priority: -100,
+				},
+			},
+			Sorters: []interface{}{},
+		},
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func version(w http.ResponseWriter, u url.URL) {
@@ -251,13 +282,32 @@ func queue(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(response))
 }
 
+type HistorySlot struct {
+	Name         string `json:"name"`
+	NzbName      string `json:"nzb_name"`
+	Category     string `json:"category"`
+	Bytes        int64  `json:"bytes"`
+	DownloadTime int    `json:"download_time"`
+	Status       string `json:"status"`
+	Storage      string `json:"storage"`
+	NzoId        string `json:"nzo_id"`
+}
+
+type History struct {
+	Slots []HistorySlot `json:"slots"`
+}
+
+type HistoryResponse struct {
+	History History `json:"history"`
+}
+
 func history(w http.ResponseWriter, r *http.Request) {
 	//check for deletion call first
 	//api?mode=history&name=delete&del_files=1&value=SABnzbd_nzo_0825646642830&archive=1&apikey=(removed)&output=json
 	if r.URL.Query().Get("name") == "delete" {
 		var id, _ = strings.CutPrefix(r.URL.Query().Get("value"), "SABnzbd_nzo_")
 		if r.URL.Query().Get("del_files") == "1" {
-			err := os.RemoveAll(DownloadPath + "/complete/" + Category + "/" + Downloads[id].FileName)
+			err := os.RemoveAll(filepath.Join(DownloadPath, "complete", Category, Downloads[id].FileName))
 			if err != nil {
 				fmt.Println("Couldn't delete folder " + Downloads[id].FileName)
 				fmt.Println(err)
@@ -265,9 +315,8 @@ func history(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(Downloads, id)
 	}
-	var response string = `{
-	    "history": {
-	        "slots": [`
+
+	slots := []HistorySlot{}
 	//fill this with completed history
 	for id := range Downloads {
 		var download Download = *Downloads[id]
@@ -276,7 +325,7 @@ func history(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		// Get the fileinfo
-		fileInfo, err := os.Stat(DownloadPath + "/complete/" + Category + "/" + download.FileName)
+		fileInfo, err := os.Stat(filepath.Join(DownloadPath, "complete", Category, download.FileName))
 		var fileSize int64
 		if err != nil {
 			//cant get file stats on Docker for some reason? giving arbitrary size info
@@ -290,22 +339,24 @@ func history(w http.ResponseWriter, r *http.Request) {
 		} else {
 			status = "Completed"
 		}
-		response += "\n{\n" +
-			"\"name\": \"" + download.FileName + "\", \n" +
-			"\"nzb_name\": \"" + download.FileName + ".nzb\",\n" +
-			"\"category\": \"" + Category + "\",\n" +
-			"\"bytes\": " + strconv.FormatInt(fileSize, 10) + ",\n" +
-			//same estimate of 10 seconds per track, could measure time in the future
-			"\"download_time\": " + strconv.Itoa(download.numTracks*30) + ",\n" +
-			"\"status\": \"" + status + "\",\n" +
-			"\"storage\": \"" + DownloadPath + "/complete/" + Category + "/" + download.FileName + "\",\n" +
-			"\"nzo_id\": \"SABnzbd_nzo_" + download.Id + "\"\n" +
-			"},"
+
+		slots = append(slots, HistorySlot{
+			Name:         download.FileName,
+			NzbName:      download.FileName + ".nzb",
+			Category:     Category,
+			Bytes:        fileSize,
+			DownloadTime: download.numTracks * 30,
+			Status:       status,
+			Storage:      filepath.Join(DownloadPath, "complete", Category, download.FileName),
+			NzoId:        "SABnzbd_nzo_" + download.Id,
+		})
 	}
-	response += `]
-	    }
-	}`
-	w.Write([]byte(response))
+
+	json.NewEncoder(w).Encode(HistoryResponse{
+		History: History{
+			Slots: slots,
+		},
+	})
 }
 
 func startDownload(Id string) {
