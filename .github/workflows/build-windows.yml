@@ -1,0 +1,28 @@
+name: Build Windows Binary
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Build
+      run: |
+        cd src
+        GOOS=windows GOARCH=amd64 go build -o ../squidarr-proxy.exe
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: squidarr-proxy-windows
+        path: squidarr-proxy.exe
