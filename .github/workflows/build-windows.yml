@@ -25,4 +25,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: squidarr-proxy-windows
-        path: squidarr-proxy.exe
+        path: |
+          squidarr-proxy.exe
+          start_squidarr.bat

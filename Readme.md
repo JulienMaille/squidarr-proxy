@@ -12,7 +12,11 @@ Complete your Lidarr library by downloading from Qobuz via squid.wtf
 
 ## Setup
 
+### Docker
 Use the included [docker-compose](docker-compose.yml) as reference for creating your container.
+
+### Windows (No Docker)
+See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for instructions on how to run this on Windows without Docker.
 
 Within Lidarr, set up a new Newznab indexer with the following settings:
 1. Disable RSS

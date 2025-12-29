@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -33,13 +34,13 @@ func main() {
 
 	//create folders if they don't exist yet
 	os.Mkdir(DownloadPath, 0775)
-	os.Mkdir(DownloadPath+"/incomplete", 0775)
-	os.Mkdir(DownloadPath+"/incomplete/"+Category, 0775)
-	os.Mkdir(DownloadPath+"/complete", 0775)
-	os.Mkdir(DownloadPath+"/complete/"+Category, 0775)
+	os.Mkdir(filepath.Join(DownloadPath, "incomplete"), 0775)
+	os.Mkdir(filepath.Join(DownloadPath, "incomplete", Category), 0775)
+	os.Mkdir(filepath.Join(DownloadPath, "complete"), 0775)
+	os.Mkdir(filepath.Join(DownloadPath, "complete", Category), 0775)
 
 	//and now clear anything in /incomplete that was created by squidarr. Likely a leftover failed download
-	folders, err := os.ReadDir(DownloadPath + "/incomplete/" + Category)
+	folders, err := os.ReadDir(filepath.Join(DownloadPath, "incomplete", Category))
 	if err != nil {
 		fmt.Println("Couldn't read incomplete folder: ")
 		fmt.Println(err)
@@ -47,7 +48,7 @@ func main() {
 	for _, folder := range folders {
 		if strings.Contains(folder.Name(), "-SQUIDWTF") {
 			fmt.Println("Removing incomplete download " + folder.Name())
-			err := os.RemoveAll(DownloadPath + "/incomplete/" + Category + "/" + folder.Name())
+			err := os.RemoveAll(filepath.Join(DownloadPath, "incomplete", Category, folder.Name()))
 			if err != nil {
 				fmt.Println("Failed to remove folder!")
 				fmt.Println(err)
@@ -57,7 +58,7 @@ func main() {
 
 	// Generate a basic list of downloads from folders in /complete. likely from completed downloads that weren't imported before reboot.
 	// Adding these to the downloads list allows importing/deleting from Lidarr
-	folders, _ = os.ReadDir(DownloadPath + "/complete/" + Category)
+	folders, _ = os.ReadDir(filepath.Join(DownloadPath, "complete", Category))
 	for _, folder := range folders {
 		if strings.Contains(folder.Name(), "-SQUIDWTF") {
 			fmt.Println("Adding completed download " + folder.Name() + " to history")
