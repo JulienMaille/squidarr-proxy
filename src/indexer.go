@@ -258,6 +258,27 @@ func search(w http.ResponseWriter, u url.URL) {
 	for _, album := range Albums {
 		// Removed regex sanitization of album.Title and album.Artist
 
+		var categoryName string
+		var categoryAttrs []NewznabAttr
+
+		if QualityId == "5" {
+			// MP3 320
+			categoryName = "Audio > MP3"
+			categoryAttrs = []NewznabAttr{
+				{Name: "category", Value: "3000"},
+				{Name: "category", Value: "3010"},
+				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
+			}
+		} else {
+			// FLAC / Lossless (default)
+			categoryName = "Audio > Lossless"
+			categoryAttrs = []NewznabAttr{
+				{Name: "category", Value: "3000"},
+				{Name: "category", Value: "3040"},
+				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
+			}
+		}
+
 		items = append(items, Item{
 			Title: releaseName(album),
 			Guid: Guid{
@@ -267,17 +288,13 @@ func search(w http.ResponseWriter, u url.URL) {
 			Link:        "http://servername.com/rss/nzb/e9c515e02346086e3a477a5436d7bc8c&i=1&r=18cf9f0a736041465e3bd521d00a90b9",
 			Comments:    "http://servername.com/rss/viewnzb/e9c515e02346086e3a477a5436d7bc8c#comments",
 			PubDate:     time.Unix(album.ReleaseDate, 0).Format("Mon, 02 Jan 2006 15:04:05 -0700"),
-			Category:    "Audio > Lossless",
+			Category:    categoryName,
 			Description: album.Artist + " " + album.Title,
 			Enclosure: Enclosure{
 				Url:    "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey,
 				Type:   "application/x-nzb",
 			},
-			Attrs: []NewznabAttr{
-				{Name: "category", Value: "3000"},
-				{Name: "category", Value: "3040"},
-				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
-			},
+			Attrs: categoryAttrs,
 		})
 	}
 
