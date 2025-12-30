@@ -14,6 +14,8 @@ var Category string
 var Port string
 var ApiLink string
 var ApiKey string
+var QualityId string
+var FileExtension string
 
 func getEnv(key string, fallback string) string {
 	value := os.Getenv(key)
@@ -29,6 +31,15 @@ func main() {
 	Port = getEnv("PORT", "8687")
 	ApiLink = "https://qobuz.squid.wtf/api"
 	ApiKey = getEnv("API_KEY", "")
+
+	quality := getEnv("QUALITY", "flac")
+	if quality == "mp3-320" {
+		QualityId = "5"
+		FileExtension = ".mp3"
+	} else {
+		QualityId = "27"
+		FileExtension = ".flac"
+	}
 
 	//create folders if they don't exist yet
 	os.Mkdir(DownloadPath, 0775)

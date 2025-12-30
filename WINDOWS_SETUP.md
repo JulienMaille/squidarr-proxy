@@ -14,13 +14,12 @@ This guide explains how to run `squidarr-proxy` on Windows without Docker.
 2.  Click on the latest run of the **Build Windows Binary** workflow.change or clicking "Run workflow" if available.
 3.  Scroll down to the **Artifacts** section.
 4.  Click on `squidarr-proxy-windows` to download the zip file.
-5.  Extract `squidarr-proxy.exe` from the zip file.
+5.  Extract the contents (`squidarr-proxy.exe` and `start_squidarr.bat`) from the zip file.
 
 ## Step 2: Setup
 
 1.  Create a folder where you want to keep the application (e.g., `C:\Tools\squidarr-proxy`).
-2.  Move `squidarr-proxy.exe` into this folder.
-3.  Download or create the `start_squidarr.bat` file from this repository and place it in the same folder.
+2.  Move `squidarr-proxy.exe` and `start_squidarr.bat` into this folder.
 
 ## Step 3: Run
 
@@ -39,6 +38,8 @@ API_KEY=your_secret_password
 DOWNLOAD_PATH=C:\Downloads\squidarr
 PORT=8687
 CATEGORY=music
+# Set QUALITY to 'flac' (default) or 'mp3-320'
+QUALITY=flac
 TZ=Europe/Berlin
 ```
 

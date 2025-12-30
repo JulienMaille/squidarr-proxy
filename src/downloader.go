@@ -202,7 +202,7 @@ func generateDownload(filename string, Id string, numTracks int) {
 		track.mediaNumber = gjson.Get(valueString, "media_number").String()
 		track.isrc = gjson.Get(valueString, "isrc").String()
 		track.completed = false
-		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=27"
+		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + QualityId
 		resp, err := http.Get(queryUrl)
 		if err != nil {
 			fmt.Println(err)
@@ -378,7 +378,7 @@ func startDownload(Id string) {
 	}
 	//Download each track
 	for _, track := range download.Files {
-		var Name string = track.Index + " - " + download.Artist + " - " + track.Name + ".flac"
+		var Name string = track.Index + " - " + download.Artist + " - " + track.Name + FileExtension
 		_, err := grab.Get(Folder+Name, track.DownloadLink)
 		if err != nil {
 			fmt.Println("Failed to download track " + track.Name)

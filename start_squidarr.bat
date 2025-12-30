@@ -8,6 +8,7 @@ REM Default values
 set PORT=8687
 set CATEGORY=music
 set TZ=Europe/Berlin
+set QUALITY=flac
 
 REM Check for config file
 if exist "config.env" (
@@ -45,6 +46,7 @@ echo.
 echo Configuration:
 echo   PORT: %PORT%
 echo   CATEGORY: %CATEGORY%
+echo   QUALITY: %QUALITY%
 echo   API_KEY: [HIDDEN]
 echo   DOWNLOAD_PATH: %DOWNLOAD_PATH%
 echo   TZ: %TZ%

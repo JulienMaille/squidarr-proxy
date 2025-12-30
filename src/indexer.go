@@ -183,7 +183,13 @@ func search(w http.ResponseWriter, u url.URL) {
 			//guesstimate filesize based on Sampling Rate, Bit Depth, Channel count and duration
 			//assuming all tracks of that album have the same specifications and that FLAC is 70% as large as WAV
 			// (Sampling Rate in Hz * Bit depth * channels * seconds) / 8 to get it from bits to bytes
-			album.Size = int64(float64(((album.SamplingRate * 1000) * (album.BitDepth * album.Channels * album.Duration) / 8)) * 0.7)
+			if QualityId == "5" {
+				// MP3 320kbps
+				album.Size = int64(320 * 1000 * album.Duration / 8)
+			} else {
+				// FLAC (default)
+				album.Size = int64(float64(((album.SamplingRate * 1000) * (album.BitDepth * album.Channels * album.Duration) / 8)) * 0.7)
+			}
 			Albums = append(Albums, album)
 			return true // keep iterating
 		})
@@ -231,7 +237,11 @@ func search(w http.ResponseWriter, u url.URL) {
 
 func releaseName(album Album) (name string) {
 	release := time.Unix(album.ReleaseDate, 0)
-	name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + strconv.FormatInt(album.SamplingRate, 10) + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+	if QualityId == "5" {
+		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+	} else {
+		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + strconv.FormatInt(album.SamplingRate, 10) + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+	}
 	return name
 }
 
