@@ -39,7 +39,6 @@ API_KEY=your_secret_password
 DOWNLOAD_PATH=C:\Downloads\squidarr
 PORT=8687
 CATEGORY=music
-REGION=eu
 TZ=Europe/Berlin
 ```
 

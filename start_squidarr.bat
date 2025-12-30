@@ -7,7 +7,6 @@ echo =================================
 REM Default values
 set PORT=8687
 set CATEGORY=music
-set REGION=eu
 set TZ=Europe/Berlin
 
 REM Check for config file
@@ -46,7 +45,6 @@ echo.
 echo Configuration:
 echo   PORT: %PORT%
 echo   CATEGORY: %CATEGORY%
-echo   REGION: %REGION%
 echo   API_KEY: [HIDDEN]
 echo   DOWNLOAD_PATH: %DOWNLOAD_PATH%
 echo   TZ: %TZ%

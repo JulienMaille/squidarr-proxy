@@ -6,7 +6,6 @@ services:
       - TZ=Europe/Berlin
       - DOWNLOAD_PATH=/data/squidarr
       - CATEGORY=music
-      - REGION=eu
       - PORT=8687
       # The API Key is the password to your instance, set when configuring indexer and downloader in Lidarr
       # Set any value you wish here, but do not leave it empty

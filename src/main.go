@@ -12,7 +12,6 @@ import (
 var DownloadPath string
 var Category string
 var Port string
-var Region string
 var ApiLink string
 var ApiKey string
 
@@ -27,9 +26,8 @@ func getEnv(key string, fallback string) string {
 func main() {
 	DownloadPath = getEnv("DOWNLOAD_PATH", "/data/squidarr/")
 	Category = getEnv("CATEGORY", "music")
-	Region = getEnv("REGION", "eu")
 	Port = getEnv("PORT", "8687")
-	ApiLink = "https://" + Region + ".qobuz.squid.wtf/api"
+	ApiLink = "https://qobuz.squid.wtf/api"
 	ApiKey = getEnv("API_KEY", "")
 
 	//create folders if they don't exist yet
