@@ -138,9 +138,8 @@ func version(w http.ResponseWriter, u url.URL) {
 
 func addfile(w http.ResponseWriter, r *http.Request) {
 	//extract filename, QobuzId and number of tracks
-	var body []byte = make([]byte, r.ContentLength)
-	_, err := r.Body.Read(body)
-	if err != nil && err != io.EOF {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		fmt.Println("/downloader/api/addfile Failed to read body:")
 		fmt.Println(err)
 	}
@@ -152,6 +151,7 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	filename = strings.TrimRight(filename, ".nzb")
 	var Id = reNum.FindString(lines[6])
 	fmt.Println(filename)
+	filename = sanitizeFilename(filename)
 	var NumTracks, _ = strconv.Atoi(reNum.FindString(lines[7]))
 	generateDownload(filename, Id, NumTracks)
 	//send response using QobuzId as nzo_id
@@ -233,11 +233,39 @@ func generateDownload(filename string, Id string, numTracks int) {
 	Downloads[Id] = &download
 }
 
+type QueueSlot struct {
+	Status       string   `json:"status"`
+	Index        int      `json:"index"`
+	Password     string   `json:"password"`
+	AvgAge       string   `json:"avg_age"`
+	Script       string   `json:"script"`
+	DirectUnpack string   `json:"direct_unpack"`
+	Mb           string   `json:"mb"`
+	MbLeft       string   `json:"mbleft"`
+	MbMissing    string   `json:"mbmissing"`
+	Size         string   `json:"size"`
+	SizeLeft     string   `json:"sizeleft"`
+	Filename     string   `json:"filename"`
+	Labels       []string `json:"labels"`
+	Priority     string   `json:"priority"`
+	Cat          string   `json:"cat"`
+	TimeLeft     string   `json:"timeleft"`
+	Percentage   string   `json:"percentage"`
+	NzoId        string   `json:"nzo_id"`
+	UnpackOpts   string   `json:"unpackopts"`
+}
+
+type Queue struct {
+	Paused bool        `json:"paused"`
+	Slots  []QueueSlot `json:"slots"`
+}
+
+type QueueResponse struct {
+	Queue Queue `json:"queue"`
+}
+
 func queue(w http.ResponseWriter, r *http.Request) {
-	var response string = "{\n" +
-		"	\"queue\": {\n" +
-		"		\"paused\": false,\n" +
-		"		\"slots\": ["
+	slots := []QueueSlot{}
 
 	//fill slots with current download queue
 	var index int = 0
@@ -251,35 +279,37 @@ func queue(w http.ResponseWriter, r *http.Request) {
 		timeleft := (download.numTracks - download.downloaded) * 10
 		//Guessing progress based on how many tracks are left, not based on file size
 		progress := (int((float64(download.downloaded) / float64(download.numTracks)) * 100))
-		response += "\n{\n" +
-			"			\"status\": \"Downloading\",\n" +
-			"			\"index\": " + strconv.Itoa(index) + ",\n" +
-			//mostly answering the same garbage, hope Lidarr doesn't pay attention...
-			"			\"password\": \"\",\n" +
-			"			\"avg_age\": \"2895d\",\n" +
-			"			\"script\": \"None\",\n" +
-			"			\"direct_unpack\": \"30/30\",\n" +
-			//claiming every download is 100mb so mbleft is just 100-progress
-			"			\"mb\": \"" + "100" + "\",\n" +
-			"			\"mbleft\": \"" + strconv.Itoa(100-progress) + "\",\n" +
-			"			\"mbmissing\": \"0.0\",\n" +
-			"			\"size\": \"100 MB\",\n" +
-			"			\"sizeleft\": \"" + strconv.Itoa(100-progress) + " MB\",\n" +
-			"			\"filename\": \"" + download.FileName + "\",\n" +
-			"			\"labels\": [],\n" +
-			"			\"priority\": \"Normal\",\n" +
-			"			\"cat\": \"" + Category + "\",\n" +
-			"			\"timeleft\": \"0:" + strconv.Itoa(timeleft/60) + ":" + strconv.Itoa(timeleft%60) + "\",\n" +
-			"			\"percentage\": \"" + strconv.Itoa(progress) + "\",\n" +
-			"			\"nzo_id\": \"SABnzbd_nzo_" + download.Id + "\",\n" +
-			"			\"unpackopts\": \"3\"\n" +
-			"},\n"
+
+		slots = append(slots, QueueSlot{
+			Status:       "Downloading",
+			Index:        index,
+			Password:     "",
+			AvgAge:       "2895d",
+			Script:       "None",
+			DirectUnpack: "30/30",
+			Mb:           "100",
+			MbLeft:       strconv.Itoa(100 - progress),
+			MbMissing:    "0.0",
+			Size:         "100 MB",
+			SizeLeft:     strconv.Itoa(100-progress) + " MB",
+			Filename:     download.FileName,
+			Labels:       []string{},
+			Priority:     "Normal",
+			Cat:          Category,
+			TimeLeft:     "0:" + strconv.Itoa(timeleft/60) + ":" + strconv.Itoa(timeleft%60),
+			Percentage:   strconv.Itoa(progress),
+			NzoId:        "SABnzbd_nzo_" + download.Id,
+			UnpackOpts:   "3",
+		})
+		index++
 	}
 
-	response += "]\n" +
-		"	}\n" +
-		"}"
-	w.Write([]byte(response))
+	json.NewEncoder(w).Encode(QueueResponse{
+		Queue: Queue{
+			Paused: false,
+			Slots:  slots,
+		},
+	})
 }
 
 type HistorySlot struct {
@@ -359,18 +389,24 @@ func history(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func sanitizeFilename(name string) string {
+	// Forbidden characters on Windows: < > : " / \ | ? *
+	re := regexp.MustCompile(`[<>:"/\\|?*]`)
+	return re.ReplaceAllString(name, "_")
+}
+
 func startDownload(Id string) {
 	download := Downloads[Id]
 	//create folder
-	var Folder string = DownloadPath + "/incomplete/" + Category + "/" + download.FileName + "/"
+	var Folder string = filepath.Join(DownloadPath, "incomplete", Category, download.FileName)
 	err := os.Mkdir(Folder, 0755)
 	if err != nil {
-		fmt.Println("Couldn't create folder in " + DownloadPath + "/incomplete/" + Category)
+		fmt.Println("Couldn't create folder in " + filepath.Join(DownloadPath, "incomplete", Category))
 		fmt.Println(err)
 		return
 	}
 	//Download cover art
-	_, err = grab.Get(Folder+"cover.jpg", download.CoverUrl)
+	_, err = grab.Get(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
 	if err != nil {
 		fmt.Println("Failed to download cover")
 		fmt.Println(err)
@@ -378,8 +414,8 @@ func startDownload(Id string) {
 	}
 	//Download each track
 	for _, track := range download.Files {
-		var Name string = track.Index + " - " + download.Artist + " - " + track.Name + FileExtension
-		_, err := grab.Get(Folder+Name, track.DownloadLink)
+		var Name string = sanitizeFilename(track.Index+" - "+download.Artist+" - "+track.Name) + FileExtension
+		_, err := grab.Get(filepath.Join(Folder, Name), track.DownloadLink)
 		if err != nil {
 			fmt.Println("Failed to download track " + track.Name)
 			fmt.Println(err)
@@ -387,11 +423,11 @@ func startDownload(Id string) {
 		} else {
 			track.completed = true
 			download.downloaded += 1
-			writeMetaData(*download, track, Folder+Name)
+			writeMetaData(*download, track, filepath.Join(Folder, Name))
 		}
 	}
 	//Download (should be) complete, move to complete folder
-	os.Rename(Folder, DownloadPath+"/complete/"+Category+"/"+download.FileName)
+	os.Rename(Folder, filepath.Join(DownloadPath, "complete", Category, download.FileName))
 }
 
 func writeMetaData(album Download, track File, fileName string) {
