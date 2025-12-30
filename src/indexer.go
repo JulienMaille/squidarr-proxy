@@ -283,10 +283,10 @@ func search(w http.ResponseWriter, u url.URL) {
 			Title: releaseName(album),
 			Guid: Guid{
 				IsPermaLink: true,
-				Value:       "http://servername.com/rss/viewnzb/e9c515e02346086e3a477a5436d7bc8c",
+				Value:       "https://www.qobuz.com/ie-en/album/" + album.Id,
 			},
-			Link:        "http://servername.com/rss/nzb/e9c515e02346086e3a477a5436d7bc8c&i=1&r=18cf9f0a736041465e3bd521d00a90b9",
-			Comments:    "http://servername.com/rss/viewnzb/e9c515e02346086e3a477a5436d7bc8c#comments",
+			Link:        "https://www.qobuz.com/ie-en/album/" + album.Id,
+			Comments:    "https://www.qobuz.com/ie-en/album/" + album.Id,
 			PubDate:     time.Unix(album.ReleaseDate, 0).Format("Mon, 02 Jan 2006 15:04:05 -0700"),
 			Category:    categoryName,
 			Description: album.Artist + " " + album.Title,
