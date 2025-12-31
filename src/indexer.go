@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -186,18 +187,7 @@ func music(w http.ResponseWriter, u url.URL) {
 	}
 }
 
-func search(w http.ResponseWriter, u url.URL) {
-	//doing the actual querying request
-	//getting the query parameters
-	limit, err := strconv.Atoi(u.Query().Get("limit"))
-	if err != nil {
-		limit = 10
-	}
-	var query string = strings.Replace(u.Query().Get("q"), " ", "+", -1)
-	offset, err := strconv.Atoi(u.Query().Get("offset"))
-	if err != nil {
-		offset = 0
-	}
+func fetchAlbums(query string, limit int, offset int) []Album {
 	var Albums []Album
 	//squid.wtf seems to only be able to output 10 items (albums/tracks each) at once
 	//so iterate over 10 items at a time until reaching the limit...
@@ -206,21 +196,19 @@ func search(w http.ResponseWriter, u url.URL) {
 		resp, err := http.Get(queryUrl)
 		if err != nil {
 			fmt.Println(err)
-			return
+			return Albums
 		}
 		//making the request body usable
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Println(err)
-			return
+			return Albums
 		}
 		//check the number of results and modify limit to avoid unnecessary requests
 		//lidarr seems to always start with 100
-		if limit == 100 {
-			total := int(gjson.Get(string(bodyBytes), "data.albums.total").Int())
-			if total < 100 {
-				limit = total
-			}
+		total := int(gjson.Get(string(bodyBytes), "data.albums.total").Int())
+		if total < limit {
+			limit = total
 		}
 		//iterate over each album and create an Album struct object from it
 		result := gjson.Get(string(bodyBytes), "data.albums.items")
@@ -252,6 +240,39 @@ func search(w http.ResponseWriter, u url.URL) {
 			Albums = append(Albums, album)
 			return true // keep iterating
 		})
+	}
+	return Albums
+}
+
+func search(w http.ResponseWriter, u url.URL) {
+	//doing the actual querying request
+	//getting the query parameters
+	limit, err := strconv.Atoi(u.Query().Get("limit"))
+	if err != nil {
+		limit = 10
+	}
+	rawQuery := u.Query().Get("q")
+	var query string = strings.Replace(rawQuery, " ", "+", -1)
+	offset, err := strconv.Atoi(u.Query().Get("offset"))
+	if err != nil {
+		offset = 0
+	}
+	
+	Albums := fetchAlbums(query, limit, offset)
+
+	// Check if we need to fetch more results without year
+	re := regexp.MustCompile(`\s\d{4}$`)
+	if len(Albums) < limit && re.MatchString(rawQuery) {
+		cleanQuery := re.ReplaceAllString(rawQuery, "")
+		cleanQueryUrlEncoded := strings.Replace(cleanQuery, " ", "+", -1)
+		
+		targetTotal := limit - 1
+		needed := targetTotal - len(Albums)
+		
+		if needed > 0 {
+			moreAlbums := fetchAlbums(cleanQueryUrlEncoded, needed, 0)
+			Albums = append(Albums, moreAlbums...)
+		}
 	}
 
 	items := []Item{}
