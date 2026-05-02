@@ -207,6 +207,13 @@ func fetchAlbums(query string, limit int, offset int) []Album {
 		//check the number of results and modify limit to avoid unnecessary requests
 		//lidarr seems to always start with 100
 		total := int(gjson.Get(string(bodyBytes), "data.albums.total").Int())
+		if total == 0 {
+			total = int(gjson.Get(string(bodyBytes), "data.total").Int())
+		}
+		if total == 0 {
+		    // if total is 0, let's just see how many items are returned in data.albums.items
+		    total = len(gjson.Get(string(bodyBytes), "data.albums.items").Array())
+		}
 		if total < limit {
 			limit = total
 		}
@@ -214,14 +221,24 @@ func fetchAlbums(query string, limit int, offset int) []Album {
 		result := gjson.Get(string(bodyBytes), "data.albums.items")
 		result.ForEach(func(key, value gjson.Result) bool {
 			var album Album
-			var resultString string = value.String()
+			typ := value.Get("type").String()
+			var content gjson.Result
+			if typ == "albums" {
+				content = value.Get("content")
+			} else if typ == "tracks" {
+				content = value.Get("content.album")
+			} else {
+				return true
+			}
+
+			var resultString string = content.String()
 			album.Artist = gjson.Get(resultString, "artist.name").String()
 			album.Title = gjson.Get(resultString, "title").String()
 			album.Edition = gjson.Get(resultString, "version").String()
 			album.ReleaseDate = gjson.Get(resultString, "released_at").Int()
 			album.Publisher = gjson.Get(resultString, "label.name").String()
 			album.CoverUrl = gjson.Get(resultString, "image.small").String()
-			album.SamplingRate = gjson.Get(resultString, "maximum_sampling_rate").Int()
+			album.SamplingRate = int64(gjson.Get(resultString, "maximum_sampling_rate").Float())
 			album.BitDepth = gjson.Get(resultString, "maximum_bit_depth").Int()
 			album.Id = gjson.Get(resultString, "id").String()
 			album.NumTracks = gjson.Get(resultString, "tracks_count").Int()
