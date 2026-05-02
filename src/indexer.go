@@ -232,6 +232,8 @@ func fetchAlbums(query string, limit int, offset int) []Album {
 				content = value.Get("content")
 			} else if typ == "tracks" {
 				content = value.Get("content.album")
+			} else if typ == "" {
+				content = value
 			} else {
 				return true
 			}
