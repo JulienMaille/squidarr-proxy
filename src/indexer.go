@@ -136,7 +136,9 @@ type NewznabAttr struct {
 
 func music(w http.ResponseWriter, u url.URL) {
 	if u.Query().Get("q") == "" {
-		fmt.Println("searching with no query, responding garbage...")
+		if Debug {
+			fmt.Println("searching with no query, responding garbage...")
+		}
 		rss := Rss{
 			Version: "2.0",
 			Newznab: "http://www.newznab.com/DTD/2010/feeds/attributes/",
@@ -193,6 +195,9 @@ func fetchAlbums(query string, limit int, offset int) []Album {
 	//so iterate over 10 items at a time until reaching the limit...
 	for i := 0; i < limit; i += 10 {
 		var queryUrl string = ApiLink + "/get-music?q=" + query + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=10"
+		if Debug {
+			fmt.Println("Searching with query:", queryUrl)
+		}
 		resp, err := http.Get(queryUrl)
 		if err != nil {
 			fmt.Println(err)
@@ -276,6 +281,10 @@ func search(w http.ResponseWriter, u url.URL) {
 	}
 	
 	Albums := fetchAlbums(query, limit, offset)
+
+	if Debug {
+		fmt.Println("Total results returned from search:", len(Albums))
+	}
 
 	// Check if we need to fetch more results without year
 	re := regexp.MustCompile(`\s\d{4}$`)

@@ -16,6 +16,7 @@ var ApiLink string
 var ApiKey string
 var QualityId string
 var FileExtension string
+var Debug bool
 
 func getEnv(key string, fallback string) string {
 	value := os.Getenv(key)
@@ -32,6 +33,7 @@ func main() {
 	ApiLink = "https://qobuz.kennyy.com.br/api"
 	ApiKey = getEnv("API_KEY", "")
 
+	Debug = getEnv("DEBUG", "false") == "true"
 	quality := getEnv("QUALITY", "flac")
 	if quality == "mp3-320" {
 		QualityId = "5" // LOW in Monochrome API
