@@ -29,15 +29,18 @@ func main() {
 	DownloadPath = getEnv("DOWNLOAD_PATH", "/data/squidarr/")
 	Category = getEnv("CATEGORY", "music")
 	Port = getEnv("PORT", "8687")
-	ApiLink = "https://qobuz.squid.wtf/api"
+	ApiLink = "https://qobuz.kennyy.com.br/api"
 	ApiKey = getEnv("API_KEY", "")
 
 	quality := getEnv("QUALITY", "flac")
 	if quality == "mp3-320" {
-		QualityId = "5"
+		QualityId = "5" // LOW in Monochrome API
 		FileExtension = ".mp3"
+	} else if quality == "flac-lossless" {
+		QualityId = "7" // LOSSLESS in Monochrome API
+		FileExtension = ".flac"
 	} else {
-		QualityId = "27"
+		QualityId = "27" // HI_RES_LOSSLESS in Monochrome API
 		FileExtension = ".flac"
 	}
 
