@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +27,8 @@ type Album struct {
 	Channels     int64
 	Duration     int64
 	Size         int64
+	Genre        string
+	QobuzUrl     string
 }
 
 func handleIndexerRequest(w http.ResponseWriter, r *http.Request) {
@@ -189,8 +190,18 @@ func music(w http.ResponseWriter, u url.URL) {
 	}
 }
 
-func fetchAlbums(query string, limit int, offset int) []Album {
+func fetchAlbums(query string, limit int, offset int, qualityParam string) []Album {
 	var Albums []Album
+
+	quality := qualityParam
+	if quality == "" || quality == "default" {
+		quality = QualityId
+	} else if quality == "mp3-320" {
+		quality = "5"
+	} else if quality == "flac" {
+		quality = "7"
+	}
+
 	//squid.wtf seems to only be able to output 10 items (albums/tracks each) at once
 	//so iterate over 10 items at a time until reaching the limit...
 	for i := 0; i < limit; i += 10 {
@@ -251,10 +262,12 @@ func fetchAlbums(query string, limit int, offset int) []Album {
 			album.NumTracks = gjson.Get(resultString, "tracks_count").Int()
 			album.Channels = gjson.Get(resultString, "maximum_channel_count").Int()
 			album.Duration = gjson.Get(resultString, "duration").Int()
+			album.Genre = gjson.Get(resultString, "genre.name").String()
+			album.QobuzUrl = gjson.Get(resultString, "url").String()
 			//guesstimate filesize based on Sampling Rate, Bit Depth, Channel count and duration
 			//assuming all tracks of that album have the same specifications and that FLAC is 70% as large as WAV
 			// (Sampling Rate in Hz * Bit depth * channels * seconds) / 8 to get it from bits to bytes
-			if QualityId == "5" {
+			if quality == "5" {
 				// MP3 320kbps
 				album.Size = int64(320 * 1000 * album.Duration / 8)
 			} else {
@@ -282,25 +295,19 @@ func search(w http.ResponseWriter, u url.URL) {
 		offset = 0
 	}
 	
-	Albums := fetchAlbums(query, limit, offset)
-
-	if Debug {
-		fmt.Println("Total results returned from search:", len(Albums))
+	quality := u.Query().Get("quality")
+	if quality == "" || quality == "default" {
+		quality = QualityId
+	} else if quality == "mp3-320" {
+		quality = "5"
+	} else if quality == "flac" {
+		quality = "7"
 	}
 
-	// Check if we need to fetch more results without year
-	re := regexp.MustCompile(`\s\d{4}$`)
-	if len(Albums) < limit && re.MatchString(rawQuery) {
-		cleanQuery := re.ReplaceAllString(rawQuery, "")
-		cleanQueryUrlEncoded := strings.Replace(cleanQuery, " ", "+", -1)
-		
-		targetTotal := limit - 1
-		needed := targetTotal - len(Albums)
-		
-		if needed > 0 {
-			moreAlbums := fetchAlbums(cleanQueryUrlEncoded, needed, 0)
-			Albums = append(Albums, moreAlbums...)
-		}
+	Albums := fetchAlbums(query, limit, offset, quality)
+
+	if Debug {
+		fmt.Println("Total results returned from search:", len(Albums), "Quality:", quality)
 	}
 
 	items := []Item{}
@@ -310,13 +317,19 @@ func search(w http.ResponseWriter, u url.URL) {
 		var categoryName string
 		var categoryAttrs []NewznabAttr
 
-		if QualityId == "5" {
+		if quality == "5" {
 			// MP3 320
 			categoryName = "Audio > MP3"
 			categoryAttrs = []NewznabAttr{
 				{Name: "category", Value: "3000"},
 				{Name: "category", Value: "3010"},
 				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
+				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
+				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
+				{Name: "coverurl", Value: album.CoverUrl},
+				{Name: "genre", Value: album.Genre},
+				{Name: "artist", Value: album.Artist},
+				{Name: "album", Value: album.Title},
 			}
 		} else {
 			// FLAC / Lossless (default)
@@ -325,25 +338,31 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "category", Value: "3000"},
 				{Name: "category", Value: "3040"},
 				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
+				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
+				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
+				{Name: "coverurl", Value: album.CoverUrl},
+				{Name: "genre", Value: album.Genre},
+				{Name: "artist", Value: album.Artist},
+				{Name: "album", Value: album.Title},
 			}
 		}
 
 		items = append(items, Item{
-			Title: releaseName(album),
+			Title: releaseName(album, quality),
 			Guid: Guid{
 				IsPermaLink: true,
-				Value:       "https://www.qobuz.com/ie-en/album/" + album.Id,
+				Value:       album.QobuzUrl,
 			},
-			Link:        "https://www.qobuz.com/ie-en/album/" + album.Id,
-			Comments:    "https://www.qobuz.com/ie-en/album/" + album.Id,
+			Link:        album.QobuzUrl,
+			Comments:    album.QobuzUrl,
 			PubDate:     time.Unix(album.ReleaseDate, 0).Format("Mon, 02 Jan 2006 15:04:05 -0700"),
 			Category:    categoryName,
 			Description: album.Artist + " " + album.Title,
 			Enclosure: Enclosure{
-				Url:    "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey,
+				Url:    "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + quality,
 				Type:   "application/x-nzb",
 			},
-			Attrs: categoryAttrs,
+			Attrs: append(categoryAttrs, NewznabAttr{Name: "genre", Value: album.Genre}),
 		})
 	}
 
@@ -365,9 +384,9 @@ func search(w http.ResponseWriter, u url.URL) {
 	xml.NewEncoder(w).Encode(rss)
 }
 
-func releaseName(album Album) (name string) {
+func releaseName(album Album, quality string) (name string) {
 	release := time.Unix(album.ReleaseDate, 0)
-	if QualityId == "5" {
+	if quality == "5" {
 		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
 	} else {
 		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + strconv.FormatInt(album.SamplingRate, 10) + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
@@ -378,11 +397,13 @@ func releaseName(album Album) (name string) {
 func fakenzb(w http.ResponseWriter, u url.URL) {
 	QobuzId := u.Query().Get("qobuzid")
 	NumTracks := u.Query().Get("numtracks")
+	Quality := u.Query().Get("quality")
 	w.Header().Set("Content-Type", "application/x-nzb")
 	response := "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n" +
 		"<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.0//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.0.dtd\">\n" +
 		"<!-- " + QobuzId + "  -->\n" +
 		"<!-- " + NumTracks + " -->\n" +
+		"<!-- " + Quality + " -->\n" +
 		"<nzb>\n" +
 		"    <file post_id=\"1\">\n" +
 		"        <groups>\n" +

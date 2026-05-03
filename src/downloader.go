@@ -142,18 +142,40 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Println("/downloader/api/addfile Failed to read body:")
 		fmt.Println(err)
+		return
 	}
-	reNum := regexp.MustCompile("[a-zA-Z0-9]+")
-	reName := regexp.MustCompile("filename=.*.nzb")
-	var lines []string = strings.Split(string(body), "\n")
-	var filename string = reName.FindString(lines[1])
-	filename = strings.Trim(filename, "filename=\"")
-	filename = strings.TrimRight(filename, ".nzb")
-	var Id = reNum.FindString(lines[6])
-	fmt.Println(filename)
+	bodyStr := string(body)
+
+	// Robustly find filename in multipart body
+	reName := regexp.MustCompile(`filename="?([^"]+)\.nzb"?`)
+	nameMatch := reName.FindStringSubmatch(bodyStr)
+	var filename string
+	if len(nameMatch) > 1 {
+		filename = nameMatch[1]
+	} else {
+		filename = "download"
+	}
 	filename = sanitizeFilename(filename)
-	var NumTracks, _ = strconv.Atoi(reNum.FindString(lines[7]))
-	generateDownload(filename, Id, NumTracks)
+
+	// Find Id and NumTracks inside the NZB XML comments
+	reId := regexp.MustCompile(`<!--\s+([a-zA-Z0-9]+)\s+-->`)
+	matches := reId.FindAllStringSubmatch(bodyStr, -1)
+
+	if len(matches) < 2 {
+		fmt.Println("/downloader/api/addfile Failed to find ID or NumTracks in body")
+		return
+	}
+
+	var Id = matches[0][1]
+	var NumTracks, _ = strconv.Atoi(matches[1][1])
+	var quality = ""
+	if len(matches) > 2 {
+		quality = matches[2][1]
+	}
+
+	fmt.Println("Adding download:", filename, "ID:", Id, "Tracks:", NumTracks, "Quality:", quality)
+	generateDownload(filename, Id, NumTracks, quality)
+
 	//send response using QobuzId as nzo_id
 	w.Write([]byte("{\n" +
 		"\"status\": true,\n" +
@@ -164,12 +186,18 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func generateDownload(filename string, Id string, numTracks int) {
+func generateDownload(filename string, Id string, numTracks int, qualityParam string) {
 	var download Download
 	download.Id = Id
 	download.numTracks = numTracks
 	download.FileName = filename
 	download.downloaded = 0
+
+	quality := qualityParam
+	if quality == "" {
+		quality = QualityId
+	}
+
 	var queryUrl string = ApiLink + "/get-album?album_id=" + Id
 	resp, err := http.Get(queryUrl)
 	if err != nil {
@@ -202,7 +230,7 @@ func generateDownload(filename string, Id string, numTracks int) {
 		track.mediaNumber = gjson.Get(valueString, "media_number").String()
 		track.isrc = gjson.Get(valueString, "isrc").String()
 		track.completed = false
-		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + QualityId
+		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
 		resp, err := http.Get(queryUrl)
 		if err != nil {
 			fmt.Println(err)
