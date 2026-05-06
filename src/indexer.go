@@ -202,10 +202,12 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 		quality = "7"
 	}
 
+	escapedQuery := url.QueryEscape(query)
+
 	//squid.wtf seems to only be able to output 10 items (albums/tracks each) at once
 	//so iterate over 10 items at a time until reaching the limit...
 	for i := 0; i < limit; i += 10 {
-		var queryUrl string = ApiLink + "/get-music?q=" + query + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=10"
+		var queryUrl string = ApiLink + "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=10"
 		if Debug {
 			fmt.Println("Searching with query:", queryUrl)
 		}
@@ -288,8 +290,7 @@ func search(w http.ResponseWriter, u url.URL) {
 	if err != nil {
 		limit = 10
 	}
-	rawQuery := u.Query().Get("q")
-	var query string = strings.Replace(rawQuery, " ", "+", -1)
+	query := u.Query().Get("q")
 	offset, err := strconv.Atoi(u.Query().Get("offset"))
 	if err != nil {
 		offset = 0
