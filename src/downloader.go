@@ -59,6 +59,9 @@ type Download struct {
 	Artist     string
 	Album      string
 	Comment    string
+	Genre      string
+	Year       string
+	UPC        string
 	CoverUrl   string
 	numTracks  int
 	mediaCount int
@@ -142,18 +145,40 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Println("/downloader/api/addfile Failed to read body:")
 		fmt.Println(err)
+		return
 	}
-	reNum := regexp.MustCompile("[a-zA-Z0-9]+")
-	reName := regexp.MustCompile("filename=.*.nzb")
-	var lines []string = strings.Split(string(body), "\n")
-	var filename string = reName.FindString(lines[1])
-	filename = strings.Trim(filename, "filename=\"")
-	filename = strings.TrimRight(filename, ".nzb")
-	var Id = reNum.FindString(lines[6])
-	fmt.Println(filename)
+	bodyStr := string(body)
+
+	// Robustly find filename in multipart body
+	reName := regexp.MustCompile(`filename="?([^"]+)\.nzb"?`)
+	nameMatch := reName.FindStringSubmatch(bodyStr)
+	var filename string
+	if len(nameMatch) > 1 {
+		filename = nameMatch[1]
+	} else {
+		filename = "download"
+	}
 	filename = sanitizeFilename(filename)
-	var NumTracks, _ = strconv.Atoi(reNum.FindString(lines[7]))
-	generateDownload(filename, Id, NumTracks)
+
+	// Find Id and NumTracks inside the NZB XML comments
+	reId := regexp.MustCompile(`<!--\s+([a-zA-Z0-9]+)\s+-->`)
+	matches := reId.FindAllStringSubmatch(bodyStr, -1)
+
+	if len(matches) < 2 {
+		fmt.Println("/downloader/api/addfile Failed to find ID or NumTracks in body")
+		return
+	}
+
+	var Id = matches[0][1]
+	var NumTracks, _ = strconv.Atoi(matches[1][1])
+	var quality = ""
+	if len(matches) > 2 {
+		quality = matches[2][1]
+	}
+
+	fmt.Println("Adding download:", filename, "ID:", Id, "Tracks:", NumTracks, "Quality:", quality)
+	generateDownload(filename, Id, NumTracks, quality)
+
 	//send response using QobuzId as nzo_id
 	w.Write([]byte("{\n" +
 		"\"status\": true,\n" +
@@ -164,12 +189,18 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func generateDownload(filename string, Id string, numTracks int) {
+func generateDownload(filename string, Id string, numTracks int, qualityParam string) {
 	var download Download
 	download.Id = Id
 	download.numTracks = numTracks
 	download.FileName = filename
 	download.downloaded = 0
+
+	quality := qualityParam
+	if quality == "" {
+		quality = QualityId
+	}
+
 	var queryUrl string = ApiLink + "/get-album?album_id=" + Id
 	resp, err := http.Get(queryUrl)
 	if err != nil {
@@ -182,17 +213,25 @@ func generateDownload(filename string, Id string, numTracks int) {
 		fmt.Println(err)
 		return
 	}
-	download.Artist = gjson.Get(string(bodyBytes), "data.artist.name").String()
-	download.Album = gjson.Get(string(bodyBytes), "data.title").String()
-	download.Comment = gjson.Get(string(bodyBytes), "data.version").String()
-	download.CoverUrl = gjson.Get(string(bodyBytes), "data.image.large").String()
-	if download.Comment == "null" {
+	bodyStr := string(bodyBytes)
+
+	download.Artist = gjson.Get(bodyStr, "data.artist.name").String()
+	download.Album = gjson.Get(bodyStr, "data.title").String()
+	download.Comment = gjson.Get(bodyStr, "data.version").String()
+	download.Genre = gjson.Get(bodyStr, "data.genre.name").String()
+	releaseDate := gjson.Get(bodyStr, "data.release_date_original").String()
+	if len(releaseDate) >= 4 {
+		download.Year = releaseDate[:4]
+	}
+	download.UPC = gjson.Get(bodyStr, "data.upc").String()
+	download.CoverUrl = gjson.Get(bodyStr, "data.image.large").String()
+	if download.Comment == "null" || download.Comment == "" {
 		download.Comment = ""
 	}
-	download.numTracks = int(gjson.Get(string(bodyBytes), "data.tracks_count").Int())
-	download.mediaCount = int(gjson.Get(string(bodyBytes), "data.media_count").Int())
-	download.label = gjson.Get(string(bodyBytes), "data.copyright").String()
-	result := gjson.Get(string(bodyBytes), "data.tracks.items")
+	download.numTracks = int(gjson.Get(bodyStr, "data.tracks_count").Int())
+	download.mediaCount = int(gjson.Get(bodyStr, "data.media_count").Int())
+	download.label = gjson.Get(bodyStr, "data.copyright").String()
+	result := gjson.Get(bodyStr, "data.tracks.items")
 	result.ForEach(func(key, value gjson.Result) bool {
 		var track File
 		var valueString = value.String()
@@ -202,19 +241,19 @@ func generateDownload(filename string, Id string, numTracks int) {
 		track.mediaNumber = gjson.Get(valueString, "media_number").String()
 		track.isrc = gjson.Get(valueString, "isrc").String()
 		track.completed = false
-		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + QualityId
+		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
 		resp, err := http.Get(queryUrl)
 		if err != nil {
 			fmt.Println(err)
 			return false
 		}
 		//making the request body usable
-		bodyBytes, err := io.ReadAll(resp.Body)
+		dlBodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Println(err)
 			return false
 		}
-		track.DownloadLink = gjson.Get(string(bodyBytes), "data.url").String()
+		track.DownloadLink = gjson.Get(string(dlBodyBytes), "data.url").String()
 		if track.DownloadLink == "" {
 			fmt.Println("squid.wtf didn't give a link for track " + track.Name)
 			fmt.Println("This is most likely an error with squid.wtf, Qobuz-DL or Qobuz itself...")
@@ -399,41 +438,61 @@ func sanitizeFilename(name string) string {
 
 func startDownload(Id string) {
 	download := Downloads[Id]
+	if download == nil {
+		return
+	}
+
 	//create folder
 	var Folder string = filepath.Join(DownloadPath, "incomplete", Category, download.FileName)
-	err := os.Mkdir(Folder, 0755)
+	err := os.MkdirAll(Folder, 0755)
 	if err != nil {
-		fmt.Println("Couldn't create folder in " + filepath.Join(DownloadPath, "incomplete", Category))
-		fmt.Println(err)
+		fmt.Println("Couldn't create folder:", Folder, err)
 		return
 	}
+
 	//Download cover art
-	_, err = grab.Get(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
-	if err != nil {
-		fmt.Println("Failed to download cover")
-		fmt.Println(err)
-		return
+	if download.CoverUrl != "" {
+		_, _ = grab.Get(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
 	}
+
 	//Download each track
 	for _, track := range download.Files {
+		var trackFolder string = Folder
+		if download.mediaCount > 1 {
+			// Create CD subfolder if multiple discs
+			discNumber, _ := strconv.Atoi(track.mediaNumber)
+			trackFolder = filepath.Join(Folder, fmt.Sprintf("CD %02d", discNumber))
+			if err := os.MkdirAll(trackFolder, 0755); err != nil {
+				fmt.Printf("Error creating track folder: %v\n", err)
+			}
+		}
+
 		var Name string = sanitizeFilename(track.Index+" - "+download.Artist+" - "+track.Name) + FileExtension
-		_, err := grab.Get(filepath.Join(Folder, Name), track.DownloadLink)
+		_, err := grab.Get(filepath.Join(trackFolder, Name), track.DownloadLink)
 		if err != nil {
-			fmt.Println("Failed to download track " + track.Name)
-			fmt.Println(err)
-			return
+			fmt.Println("Failed to download track " + track.Name + ":", err)
 		} else {
 			track.completed = true
 			download.downloaded += 1
-			writeMetaData(*download, track, filepath.Join(Folder, Name))
+			writeMetaData(*download, track, filepath.Join(trackFolder, Name))
 		}
 	}
+
 	//Download (should be) complete, move to complete folder
-	os.Rename(Folder, filepath.Join(DownloadPath, "complete", Category, download.FileName))
+	destFolder := filepath.Join(DownloadPath, "complete", Category, download.FileName)
+	if err := os.MkdirAll(filepath.Dir(destFolder), 0755); err != nil {
+		fmt.Printf("Error creating destination category folder: %v\n", err)
+	}
+	err = os.Rename(Folder, destFolder)
+	if err != nil {
+		fmt.Println("Error moving to complete folder:", err)
+	} else {
+		fmt.Println("Download complete:", download.FileName)
+	}
 }
 
 func writeMetaData(album Download, track File, fileName string) {
-	err := taglib.WriteTags(fileName, map[string][]string{
+	tags := map[string][]string{
 		taglib.AlbumArtist: {album.Artist},
 		taglib.Artist:      {album.Artist},
 		taglib.Album:       {album.Album},
@@ -443,9 +502,20 @@ func writeMetaData(album Download, track File, fileName string) {
 		taglib.DiscNumber:  {track.mediaNumber},
 		taglib.Label:       {album.label},
 		taglib.ISRC:        {track.isrc},
-	}, 0)
+	}
+
+	if album.Genre != "" {
+		tags[taglib.Genre] = []string{album.Genre}
+	}
+	if album.Year != "" {
+		tags[taglib.Date] = []string{album.Year}
+	}
+	if album.UPC != "" {
+		tags["BARCODE"] = []string{album.UPC}
+	}
+
+	err := taglib.WriteTags(fileName, tags, 0)
 	if err != nil {
-		fmt.Println("Couldn't write Metadata to file " + fileName)
-		fmt.Println(err)
+		fmt.Println("Couldn't write Metadata to file " + fileName + ":", err)
 	}
 }

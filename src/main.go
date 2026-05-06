@@ -47,11 +47,9 @@ func main() {
 	}
 
 	//create folders if they don't exist yet
-	os.Mkdir(DownloadPath, 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "incomplete"), 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "incomplete", Category), 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "complete"), 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "complete", Category), 0775)
+	os.MkdirAll(DownloadPath, 0775)
+	os.MkdirAll(filepath.Join(DownloadPath, "incomplete", Category), 0775)
+	os.MkdirAll(filepath.Join(DownloadPath, "complete", Category), 0775)
 
 	//and now clear anything in /incomplete that was created by squidarr. Likely a leftover failed download
 	folders, err := os.ReadDir(filepath.Join(DownloadPath, "incomplete", Category))
@@ -91,8 +89,21 @@ func main() {
 		}
 	}
 
-	http.HandleFunc("/indexer", handleIndexerRequest)
-	http.HandleFunc("/downloader/api", handleDownloaderRequest)
+	http.HandleFunc("/indexer", corsHandler(handleIndexerRequest))
+	http.HandleFunc("/downloader/api", corsHandler(handleDownloaderRequest))
 	fmt.Println("Listening on port " + Port + "...")
 	http.ListenAndServe(":"+Port, nil)
+}
+
+func corsHandler(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		h(w, r)
+	}
 }

@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Squidarr Proxy Client</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --input-bg: #ffffff;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary: #3b82f6;
+                --bg: #0f172a;
+                --card-bg: #1e293b;
+                --text: #f1f5f9;
+                --text-muted: #94a3b8;
+                --border: #334155;
+                --input-bg: #1e293b;
+            }
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container { width: 100%; max-width: 900px; }
+        h1 { text-align: center; }
+        .card {
+            background: var(--card-bg);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 10px;
+            border: 1px solid var(--border);
+        }
+        .input-group { display: flex; gap: 10px; flex-wrap: wrap; }
+        select, input {
+            padding: 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 16px;
+            background: var(--input-bg);
+            color: var(--text);
+        }
+        input { flex-grow: 1; min-width: 200px; }
+        button {
+            padding: 10px 20px;
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.secondary { background-color: var(--text-muted); }
+        
+        .results { display: grid; gap: 10px; }
+        .result-item {
+            background: var(--card-bg);
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .result-item img {
+            width: 100px;
+            height: 100px;
+            border-radius: 4px;
+            object-fit: cover;
+            background-color: #eee;
+        }
+        .result-info { flex-grow: 1; min-width: 0; }
+        .result-title { font-weight: bold; font-size: 1.1em; margin-bottom: 2px; }
+        .result-title a { text-decoration: none; color: inherit; display: block; }
+        .result-title a:hover { text-decoration: underline; }
+        .result-release { color: var(--text-muted); font-size: 0.85em; font-weight: normal; margin-top: 2px; }
+        .result-meta { color: var(--text-muted); font-size: 0.9em; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        
+        .status { text-align: center; margin: 15px 0; font-weight: 500; }
+        .error { color: #ef4444; }
+        .success { color: #22c55e; }
+
+        .load-more-container { display: flex; justify-content: center; margin: 20px 0 40px; }
+
+        @media (max-width: 600px) {
+            .result-item { flex-direction: column; text-align: center; }
+            .input-group { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Squidarr Proxy Client</h1>
+
+    <div class="card">
+        <div class="input-group">
+            <input type="text" id="serverUrl" placeholder="Server URL (e.g. http://localhost:8687)">
+            <input type="password" id="apiKey" placeholder="API Key">
+            <button onclick="saveConfig()" class="secondary">Save Config</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <form id="searchForm" onsubmit="handleSearch(event)">
+            <div class="input-group">
+                <input type="text" id="searchInput" placeholder="Search..." required>
+                <select id="qualitySelect" onchange="savePrefs()">
+                    <option value="flac" selected>FLAC</option>
+                    <option value="mp3-320">MP3</option>
+                </select>
+                <select id="typeFilterSelect" onchange="savePrefs(); applyFilters()">
+                    <option value="all">All</option>
+                    <option value="album">Albums</option>
+                    <option value="single">Singles</option>
+                </select>
+                <select id="sortSelect" onchange="savePrefs(); applyFilters()">
+                    <option value="relevance">Relevance</option>
+                    <option value="newest">Newest</option>
+                    <option value="oldest">Oldest</option>
+                </select>
+                <button type="submit" id="searchBtn">Search</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="results" class="results"></div>
+
+    <div class="load-more-container">
+        <button id="loadMoreBtn" onclick="handleSearch(null, true)" style="display: none;">Load More</button>
+    </div>
+</div>
+
+<script>
+    const serverUrlInput = document.getElementById('serverUrl');
+    const apiKeyInput = document.getElementById('apiKey');
+    const searchInput = document.getElementById('searchInput');
+    const qualitySelect = document.getElementById('qualitySelect');
+    const typeFilterSelect = document.getElementById('typeFilterSelect');
+    const sortSelect = document.getElementById('sortSelect');
+    const searchBtn = document.getElementById('searchBtn');
+    const loadMoreBtn = document.getElementById('loadMoreBtn');
+    const statusDiv = document.getElementById('status');
+    const resultsDiv = document.getElementById('results');
+
+    let allResults = []; // Cache for dynamic filtering
+    let currentOffset = 0;
+    const limit = 20;
+
+    // Load config and preferences
+    serverUrlInput.value = localStorage.getItem('squidarr_url') || (window.location.origin === 'null' || window.location.origin.startsWith('file') ? 'http://localhost:8687' : window.location.origin);
+    apiKeyInput.value = localStorage.getItem('squidarr_key') || '';
+    qualitySelect.value = localStorage.getItem('squidarr_pref_quality') || 'flac';
+    typeFilterSelect.value = localStorage.getItem('squidarr_pref_type') || 'all';
+    sortSelect.value = localStorage.getItem('squidarr_pref_sort') || 'relevance';
+
+    function saveConfig() {
+        localStorage.setItem('squidarr_url', serverUrlInput.value.replace(/\/$/, ''));
+        localStorage.setItem('squidarr_key', apiKeyInput.value);
+        showStatus('Configuration saved!', 'success');
+    }
+
+    function savePrefs() {
+        localStorage.setItem('squidarr_pref_quality', qualitySelect.value);
+        localStorage.setItem('squidarr_pref_type', typeFilterSelect.value);
+        localStorage.setItem('squidarr_pref_sort', sortSelect.value);
+    }
+
+    function showStatus(msg, type = '') {
+        statusDiv.textContent = msg;
+        statusDiv.className = 'status ' + type;
+    }
+
+    function formatDuration(seconds) {
+        if (!seconds) return '';
+        const hrs = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+        return (hrs > 0 ? hrs + ":" + (mins < 10 ? "0" : "") : "") + mins + ":" + (secs < 10 ? "0" : "") + secs;
+    }
+
+    async function handleSearch(e, isLoadMore = false) {
+        if (e) e.preventDefault();
+        const query = searchInput.value;
+        const server = serverUrlInput.value.replace(/\/$/, '');
+        const key = apiKeyInput.value;
+        const quality = qualitySelect.value;
+
+        if (!server || !key) {
+            showStatus('Please configure Server URL and API Key first.', 'error');
+            return;
+        }
+
+        if (!isLoadMore) {
+            allResults = [];
+            currentOffset = 0;
+            resultsDiv.innerHTML = '';
+        }
+
+        showStatus(isLoadMore ? 'Loading more...' : 'Searching...');
+        searchBtn.disabled = true;
+        loadMoreBtn.disabled = true;
+
+        try {
+            let url = `${server}/indexer?t=search&q=${encodeURIComponent(query)}&apikey=${key}&limit=${limit}&offset=${currentOffset}`;
+            if (quality) url += `&quality=${quality}`;
+            
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Server returned ${response.status}`);
+            
+            const xmlText = await response.text();
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+            
+            const error = xmlDoc.querySelector('error');
+            if (error) throw new Error(error.getAttribute('description') || 'API Error');
+
+            const items = xmlDoc.querySelectorAll('item');
+            if (items.length === 0) {
+                if (!isLoadMore) showStatus('No results found.', '');
+                else showStatus('No more results.', 'success');
+                loadMoreBtn.style.display = 'none';
+            } else {
+                items.forEach((item, idx) => {
+                    const title = item.querySelector('title')?.textContent;
+                    const description = item.querySelector('description')?.textContent;
+                    const rawDate = item.querySelector('pubDate')?.textContent;
+                    const pubDate = rawDate ? new Date(rawDate).toLocaleDateString() : '';
+                    const timestamp = rawDate ? new Date(rawDate).getTime() : 0;
+                    const nzbUrl = item.querySelector('enclosure')?.getAttribute('url');
+                    const link = item.querySelector('link')?.textContent;
+                    
+                    const attrs = {};
+                    item.querySelectorAll('*').forEach(el => {
+                        if (el.tagName.toLowerCase().includes('attr')) {
+                             attrs[el.getAttribute('name')] = el.getAttribute('value');
+                        }
+                    });
+
+                    allResults.push({ 
+                        index: currentOffset + idx,
+                        title, description, pubDate, timestamp, nzbUrl, link,
+                        tracksCount: parseInt(attrs.tracks || '0'),
+                        coverUrl: attrs.coverurl || '',
+                        genre: attrs.genre || '',
+                        artistName: attrs.artist || '',
+                        albumName: attrs.album || '',
+                        sizeMB: attrs.size ? (parseInt(attrs.size) / (1024 * 1024)).toFixed(1) : '0',
+                        duration: formatDuration(parseInt(attrs.duration || 0))
+                    });
+                });
+
+                currentOffset += items.length;
+                applyFilters();
+
+                // Show load more if we got a full page of results
+                loadMoreBtn.style.display = items.length >= limit ? 'block' : 'none';
+            }
+        } catch (err) {
+            showStatus('Error: ' + err.message, 'error');
+        } finally {
+            searchBtn.disabled = false;
+            loadMoreBtn.disabled = false;
+        }
+    }
+
+    function applyFilters() {
+        const typeFilter = typeFilterSelect.value;
+        const sortBy = sortSelect.value;
+        resultsDiv.innerHTML = '';
+        
+        let filtered = allResults.filter(item => {
+            if (typeFilter === 'album') return item.tracksCount > 1;
+            if (typeFilter === 'single') return item.tracksCount === 1;
+            return true;
+        });
+
+        if (sortBy === 'newest') filtered.sort((a, b) => b.timestamp - a.timestamp);
+        else if (sortBy === 'oldest') filtered.sort((a, b) => a.timestamp - b.timestamp);
+        else filtered.sort((a, b) => a.index - b.index);
+
+        showStatus(`Showing ${filtered.length} of ${allResults.length} results.`);
+        filtered.forEach(renderResult);
+    }
+
+    function renderResult(data) {
+        const div = document.createElement('div');
+        div.className = 'result-item';
+        div.innerHTML = `
+            <img src="${data.coverUrl}" alt="Cover" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iI2VlZSIvPjwvc3ZnPg=='">
+            <div class="result-info">
+                <div class="result-title">
+                    <span>${data.artistName}</span> - <span>${data.albumName}</span>
+                    <a href="${data.link}" target="_blank">
+                        <div class="result-release">${data.title}</div>
+                    </a>
+                </div>
+                <div class="result-meta">${data.genre ? data.genre + ' • ' : ''}${data.pubDate}</div>
+                <div class="result-meta">${data.tracksCount} tracks • ${data.duration} • ${data.sizeMB} MB</div>
+            </div>
+            <button onclick="download('${data.nzbUrl}', '${data.title.replace(/'/g, "\\'")}')">Download</button>
+        `;
+        resultsDiv.appendChild(div);
+    }
+
+    async function download(nzbPath, title) {
+        const server = serverUrlInput.value.replace(/\/$/, '');
+        const key = apiKeyInput.value;
+        const fullNzbUrl = nzbPath.startsWith('http') ? nzbPath : server + nzbPath;
+
+        try {
+            showStatus(`Preparing download: ${title}...`);
+            const nzbResponse = await fetch(fullNzbUrl);
+            if (!nzbResponse.ok) throw new Error('Failed to fetch NZB file');
+            const nzbBlob = await nzbResponse.blob();
+
+            const formData = new FormData();
+            formData.append('nzbfile', nzbBlob, `${title}.nzb`);
+
+            const uploadResponse = await fetch(`${server}/downloader/api?mode=addfile&apikey=${key}`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!uploadResponse.ok) throw new Error('Failed to start download on server');
+            const result = await uploadResponse.json();
+            if (result.status) showStatus(`Download started: ${title}`, 'success');
+            else throw new Error('Server returned failure status');
+        } catch (err) {
+            showStatus('Download Error: ' + err.message, 'error');
+        }
+    }
+</script>
+
+</body>
+</html>
