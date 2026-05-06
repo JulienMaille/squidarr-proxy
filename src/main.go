@@ -47,11 +47,9 @@ func main() {
 	}
 
 	//create folders if they don't exist yet
-	os.Mkdir(DownloadPath, 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "incomplete"), 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "incomplete", Category), 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "complete"), 0775)
-	os.Mkdir(filepath.Join(DownloadPath, "complete", Category), 0775)
+	os.MkdirAll(DownloadPath, 0775)
+	os.MkdirAll(filepath.Join(DownloadPath, "incomplete", Category), 0775)
+	os.MkdirAll(filepath.Join(DownloadPath, "complete", Category), 0775)
 
 	//and now clear anything in /incomplete that was created by squidarr. Likely a leftover failed download
 	folders, err := os.ReadDir(filepath.Join(DownloadPath, "incomplete", Category))
