@@ -204,10 +204,10 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 
 	escapedQuery := url.QueryEscape(query)
 
-	//squid.wtf seems to only be able to output 10 items (albums/tracks each) at once
-	//so iterate over 10 items at a time until reaching the limit...
-	for i := 0; i < limit; i += 10 {
-		var queryUrl string = ApiLink + "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=10"
+	// The API can handle more than 10 items per request. We'll use a batch size of 50.
+	batchSize := 50
+	for i := 0; i < limit; i += batchSize {
+		var queryUrl string = ApiLink + "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
 		if Debug {
 			fmt.Println("Searching with query:", queryUrl)
 		}
