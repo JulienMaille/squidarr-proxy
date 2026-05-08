@@ -60,6 +60,9 @@ func main() {
 	DownloadPath = getEnv("DOWNLOAD_PATH", "/data/squidarr/")
 	Category = getEnv("CATEGORY", "music")
 	Port = getEnv("PORT", "8687")
+	// Alternative API links:
+	// ApiLink = getEnv("API_LINK", "https://qobuz.kennyy.com.br/api")
+	// ApiLink = getEnv("API_LINK", "https://qobuz.squid.wtf/api")
 	ApiLink = getEnv("API_LINK", "https://trypt-hifi-dl-456461932686.us-west1.run.app/api")
 	ApiKey = getEnv("API_KEY", "")
 
