@@ -201,8 +201,8 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		quality = QualityId
 	}
 
-	var queryUrl string = ApiLink + "/get-album?album_id=" + Id
-	resp, err := http.Get(queryUrl)
+	var endpoint string = "/get-album?album_id=" + Id
+	resp, err := apiRequest(endpoint)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -241,8 +241,8 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		track.mediaNumber = gjson.Get(valueString, "media_number").String()
 		track.isrc = gjson.Get(valueString, "isrc").String()
 		track.completed = false
-		var queryUrl string = ApiLink + "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
-		resp, err := http.Get(queryUrl)
+		var endpoint string = "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
+		resp, err := apiRequest(endpoint)
 		if err != nil {
 			fmt.Println(err)
 			return false
@@ -436,6 +436,30 @@ func sanitizeFilename(name string) string {
 	return re.ReplaceAllString(name, "_")
 }
 
+func grabFile(dest string, url string) (*grab.Response, error) {
+	req, err := grab.NewRequest(dest, url)
+	if err != nil {
+		return nil, err
+	}
+
+	if UseFallback && strings.Contains(url, "trypt-hifi-dl") {
+		req.HTTPRequest.Header.Set("accept", "*/*")
+		req.HTTPRequest.Header.Set("accept-language", "fr-FR,fr;q=0.9,en-US;q=0.8,en-GB;q=0.7,en;q=0.6,it-IT;q=0.5,it;q=0.4,sv;q=0.3")
+		req.HTTPRequest.Header.Set("dnt", "1")
+		req.HTTPRequest.Header.Set("origin", "https://monochrome.tf")
+		req.HTTPRequest.Header.Set("priority", "u=1, i")
+		req.HTTPRequest.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
+		req.Header.Set("sec-ch-ua-mobile", "?0")
+		req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+		req.Header.Set("sec-fetch-dest", "empty")
+		req.Header.Set("sec-fetch-mode", "cors")
+		req.Header.Set("sec-fetch-site", "cross-site")
+		req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
+	}
+
+	return grab.DefaultClient.Do(req)
+}
+
 func startDownload(Id string) {
 	download := Downloads[Id]
 	if download == nil {
@@ -452,7 +476,7 @@ func startDownload(Id string) {
 
 	//Download cover art
 	if download.CoverUrl != "" {
-		_, _ = grab.Get(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
+		_, _ = grabFile(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
 	}
 
 	//Download each track
@@ -468,7 +492,7 @@ func startDownload(Id string) {
 		}
 
 		var Name string = sanitizeFilename(track.Index+" - "+download.Artist+" - "+track.Name) + FileExtension
-		_, err := grab.Get(filepath.Join(trackFolder, Name), track.DownloadLink)
+		_, err := grabFile(filepath.Join(trackFolder, Name), track.DownloadLink)
 		if err != nil {
 			fmt.Println("Failed to download track " + track.Name + ":", err)
 		} else {

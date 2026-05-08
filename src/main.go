@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"os"
@@ -13,10 +14,56 @@ var DownloadPath string
 var Category string
 var Port string
 var ApiLink string
+var FallbackApiLink = "https://trypt-hifi-dl-456461932686.us-west1.run.app/api"
+var UseFallback = false
 var ApiKey string
 var QualityId string
 var FileExtension string
 var Debug bool
+
+func apiRequest(endpoint string) (*http.Response, error) {
+	url := ApiLink + endpoint
+	if UseFallback {
+		url = FallbackApiLink + endpoint
+	}
+
+	if Debug {
+		fmt.Println("Making request to:", url)
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if UseFallback {
+		req.Header.Set("accept", "*/*")
+		req.Header.Set("accept-language", "fr-FR,fr;q=0.9,en-US;q=0.8,en-GB;q=0.7,en;q=0.6,it-IT;q=0.5,it;q=0.4,sv;q=0.3")
+		req.Header.Set("dnt", "1")
+		req.Header.Set("origin", "https://monochrome.tf")
+		req.Header.Set("priority", "u=1, i")
+		req.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
+		req.Header.Set("sec-ch-ua-mobile", "?0")
+		req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+		req.Header.Set("sec-fetch-dest", "empty")
+		req.Header.Set("sec-fetch-mode", "cors")
+		req.Header.Set("sec-fetch-site", "cross-site")
+		req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err == nil && !UseFallback && (resp.StatusCode == 403 || resp.StatusCode == 429) {
+		fmt.Println("Kennyy API blocked (status", resp.StatusCode, "), switching to fallback...")
+		UseFallback = true
+		// Close the blocked response body before retrying
+		resp.Body.Close()
+		return apiRequest(endpoint)
+	}
+
+	return resp, err
+}
 
 func getEnv(key string, fallback string) string {
 	value := os.Getenv(key)
@@ -31,6 +78,7 @@ func main() {
 	Category = getEnv("CATEGORY", "music")
 	Port = getEnv("PORT", "8687")
 	ApiLink = "https://qobuz.kennyy.com.br/api"
+	FallbackApiLink = getEnv("FALLBACK_API_LINK", "https://trypt-hifi-dl-456461932686.us-west1.run.app/api")
 	ApiKey = getEnv("API_KEY", "")
 
 	Debug = getEnv("DEBUG", "false") == "true"

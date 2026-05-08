@@ -206,11 +206,8 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 	// The API can handle more than 10 items per request. We'll use a batch size of 50.
 	batchSize := 50
 	for i := 0; i < limit; i += batchSize {
-		var queryUrl string = ApiLink + "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
-		if Debug {
-			fmt.Println("Searching with query:", queryUrl)
-		}
-		resp, err := http.Get(queryUrl)
+		var endpoint string = "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
+		resp, err := apiRequest(endpoint)
 		if err != nil {
 			fmt.Println(err)
 			return Albums
