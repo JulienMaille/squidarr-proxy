@@ -449,15 +449,15 @@ func grabFile(dest string, url string) (*grab.Response, error) {
 		req.HTTPRequest.Header.Set("origin", "https://monochrome.tf")
 		req.HTTPRequest.Header.Set("priority", "u=1, i")
 		req.HTTPRequest.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
-		req.Header.Set("sec-ch-ua-mobile", "?0")
-		req.Header.Set("sec-ch-ua-platform", `"Windows"`)
-		req.Header.Set("sec-fetch-dest", "empty")
-		req.Header.Set("sec-fetch-mode", "cors")
-		req.Header.Set("sec-fetch-site", "cross-site")
-		req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
+		req.HTTPRequest.Header.Set("sec-ch-ua-mobile", "?0")
+		req.HTTPRequest.Header.Set("sec-ch-ua-platform", `"Windows"`)
+		req.HTTPRequest.Header.Set("sec-fetch-dest", "empty")
+		req.HTTPRequest.Header.Set("sec-fetch-mode", "cors")
+		req.HTTPRequest.Header.Set("sec-fetch-site", "cross-site")
+		req.HTTPRequest.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
 	}
 
-	return grab.DefaultClient.Do(req)
+	return grab.DefaultClient.Do(req), nil
 }
 
 func startDownload(Id string) {
