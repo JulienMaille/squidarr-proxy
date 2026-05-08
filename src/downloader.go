@@ -456,7 +456,13 @@ func grabFile(dest string, url string) (*grab.Response, error) {
 	req.HTTPRequest.Header.Set("sec-fetch-site", "cross-site")
 	req.HTTPRequest.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
 
-	return grab.DefaultClient.Do(req), nil
+	resp := grab.DefaultClient.Do(req)
+	<-resp.Done
+	if err := resp.Err(); err != nil {
+		return resp, err
+	}
+
+	return resp, nil
 }
 
 func startDownload(Id string) {
