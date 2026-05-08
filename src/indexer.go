@@ -313,6 +313,8 @@ func search(w http.ResponseWriter, u url.URL) {
 
 		var categoryName string
 		var categoryAttrs []NewznabAttr
+		release := time.Unix(album.ReleaseDate, 0)
+		yearStr := strconv.Itoa(release.Year())
 
 		if quality == "5" {
 			// MP3 320
@@ -322,7 +324,10 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "category", Value: "3010"},
 				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
 				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
+				{Name: "files", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
+				{Name: "year", Value: yearStr},
+				{Name: "label", Value: album.Publisher},
 				{Name: "coverurl", Value: album.CoverUrl},
 				{Name: "genre", Value: album.Genre},
 				{Name: "artist", Value: album.Artist},
@@ -336,7 +341,10 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "category", Value: "3040"},
 				{Name: "size", Value: strconv.FormatInt(album.Size, 10)},
 				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
+				{Name: "files", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
+				{Name: "year", Value: yearStr},
+				{Name: "label", Value: album.Publisher},
 				{Name: "coverurl", Value: album.CoverUrl},
 				{Name: "genre", Value: album.Genre},
 				{Name: "artist", Value: album.Artist},
