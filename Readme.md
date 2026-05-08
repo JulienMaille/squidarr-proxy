@@ -7,6 +7,19 @@ Complete your Lidarr library by downloading from Qobuz via squid.wtf
 ### Docker
 Use the included [docker-compose](docker-compose.yml) as reference for creating your container.
 
+### Configuration
+
+The following environment variables can be used to configure squidarr-proxy:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `API_LINK` | The API endpoint for metadata and download links. | `https://trypt-hifi-dl-456461932686.us-west1.run.app/api` |
+| `API_KEY` | Your unique API key for squidarr-proxy. | (none) |
+| `DOWNLOAD_PATH` | The path where music will be downloaded. | `/data/squidarr/` |
+| `QUALITY` | Download quality (`mp3-320`, `flac-lossless`, `flac-hi-res`). | `flac-hi-res` |
+| `PORT` | The port squidarr-proxy will listen on. | `8687` |
+| `DEBUG` | Enable debug logging (`true`/`false`). | `false` |
+
 ### Windows (No Docker)
 See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for instructions on how to run this on Windows without Docker.
 

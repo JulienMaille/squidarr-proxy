@@ -442,20 +442,19 @@ func grabFile(dest string, url string) (*grab.Response, error) {
 		return nil, err
 	}
 
-	if UseFallback && strings.Contains(url, "trypt-hifi-dl") {
-		req.HTTPRequest.Header.Set("accept", "*/*")
-		req.HTTPRequest.Header.Set("accept-language", "fr-FR,fr;q=0.9,en-US;q=0.8,en-GB;q=0.7,en;q=0.6,it-IT;q=0.5,it;q=0.4,sv;q=0.3")
-		req.HTTPRequest.Header.Set("dnt", "1")
-		req.HTTPRequest.Header.Set("origin", "https://monochrome.tf")
-		req.HTTPRequest.Header.Set("priority", "u=1, i")
-		req.HTTPRequest.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
-		req.HTTPRequest.Header.Set("sec-ch-ua-mobile", "?0")
-		req.HTTPRequest.Header.Set("sec-ch-ua-platform", `"Windows"`)
-		req.HTTPRequest.Header.Set("sec-fetch-dest", "empty")
-		req.HTTPRequest.Header.Set("sec-fetch-mode", "cors")
-		req.HTTPRequest.Header.Set("sec-fetch-site", "cross-site")
-		req.HTTPRequest.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
-	}
+	// Always send headers required by the new API
+	req.HTTPRequest.Header.Set("accept", "*/*")
+	req.HTTPRequest.Header.Set("accept-language", "fr-FR,fr;q=0.9,en-US;q=0.8,en-GB;q=0.7,en;q=0.6,it-IT;q=0.5,it;q=0.4,sv;q=0.3")
+	req.HTTPRequest.Header.Set("dnt", "1")
+	req.HTTPRequest.Header.Set("origin", "https://monochrome.tf")
+	req.HTTPRequest.Header.Set("priority", "u=1, i")
+	req.HTTPRequest.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
+	req.HTTPRequest.Header.Set("sec-ch-ua-mobile", "?0")
+	req.HTTPRequest.Header.Set("sec-ch-ua-platform", `"Windows"`)
+	req.HTTPRequest.Header.Set("sec-fetch-dest", "empty")
+	req.HTTPRequest.Header.Set("sec-fetch-mode", "cors")
+	req.HTTPRequest.Header.Set("sec-fetch-site", "cross-site")
+	req.HTTPRequest.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
 
 	return grab.DefaultClient.Do(req), nil
 }
