@@ -7,6 +7,12 @@ services:
       - DOWNLOAD_PATH=/data/squidarr
       - CATEGORY=music
       - PORT=8687
+      # The API endpoint for metadata and download links.
+      # Default: https://trypt-hifi-dl-456461932686.us-west1.run.app/api
+      # Alternatives:
+      # - https://qobuz.kennyy.com.br/api
+      # - https://qobuz.squid.wtf/api
+      - API_LINK=https://trypt-hifi-dl-456461932686.us-west1.run.app/api
       # The API Key is the password to your instance, set when configuring indexer and downloader in Lidarr
       # Set any value you wish here, but do not leave it empty
       - API_KEY=
