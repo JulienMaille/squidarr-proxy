@@ -6,9 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -280,9 +278,6 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 			if album.Duration == 0 && typ == "tracks" {
 				album.Duration = value.Get("content.duration").Int()
 			}
-			if album.Duration == 0 {
-				album.Duration = 1 // Fallback to avoid Lidarr duration 0 error
-			}
 
 			album.Genre = content.Get("genre.name").String()
 			album.QobuzUrl = content.Get("url").String()
@@ -309,9 +304,6 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 					ch = 2
 				}
 				album.Size = int64(float64((sr*bd*ch*album.Duration)/8) * 0.7)
-			}
-			if Debug {
-				fmt.Printf("Parsed Album: Title: %s, Artist: %s, Duration: %d, SR: %d, BD: %d\n", album.Title, album.Artist, album.Duration, album.SamplingRate, album.BitDepth)
 			}
 			Albums = append(Albums, album)
 			return true // keep iterating
@@ -367,13 +359,9 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "files", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
-				{Name: "length", Value: strconv.FormatInt(album.Duration, 10)},
-				{Name: "audio-duration", Value: strconv.FormatInt(album.Duration, 10)},
-				{Name: "audio-bitrate", Value: "320"},
 				{Name: "year", Value: yearStr},
 				{Name: "publisher", Value: album.Publisher},
 				{Name: "coverurl", Value: album.CoverUrl},
-				{Name: "genre", Value: album.Genre},
 				{Name: "artist", Value: album.Artist},
 				{Name: "album", Value: album.Title},
 			}
@@ -387,12 +375,9 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "files", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
-				{Name: "length", Value: strconv.FormatInt(album.Duration, 10)},
-				{Name: "audio-duration", Value: strconv.FormatInt(album.Duration, 10)},
 				{Name: "year", Value: yearStr},
 				{Name: "publisher", Value: album.Publisher},
 				{Name: "coverurl", Value: album.CoverUrl},
-				{Name: "genre", Value: album.Genre},
 				{Name: "artist", Value: album.Artist},
 				{Name: "album", Value: album.Title},
 			}
@@ -408,13 +393,12 @@ func search(w http.ResponseWriter, u url.URL) {
 			Comments:    album.QobuzUrl,
 			PubDate:     time.Unix(album.ReleaseDate, 0).Format("Mon, 02 Jan 2006 15:04:05 -0700"),
 			Category:    categoryName,
-			Description: fmt.Sprintf("%s - %s [%d tracks, %d seconds]", album.Artist, album.Title, album.NumTracks, album.Duration),
+			Description: album.Artist + " " + album.Title,
 			Enclosure: Enclosure{
 				Url:    "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + quality,
-				Length: album.Size,
 				Type:   "application/x-nzb",
 			},
-			Attrs: categoryAttrs,
+			Attrs: append(categoryAttrs, NewznabAttr{Name: "genre", Value: album.Genre}),
 		})
 	}
 
@@ -438,30 +422,14 @@ func search(w http.ResponseWriter, u url.URL) {
 
 func releaseName(album Album, quality string) (name string) {
 	release := time.Unix(album.ReleaseDate, 0)
-
-	// Sanitize and dot-ify Artist and Title
-	artist := cleanName(album.Artist)
-	title := cleanName(album.Title)
-
 	if quality == "5" {
-		name = fmt.Sprintf("%s.%s.%d.WEB.320.MP3-SQUIDWTF", artist, title, release.Year())
+		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
 	} else {
 		samplingRateKHz := float64(album.SamplingRate) / 1000.0
 		samplingRateStr := strconv.FormatFloat(samplingRateKHz, 'f', -1, 64)
-		name = fmt.Sprintf("%s.%s.%d.WEB.%sBIT.%sKHZ.FLAC-SQUIDWTF", artist, title, release.Year(), strconv.FormatInt(album.BitDepth, 10), samplingRateStr)
+		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + samplingRateStr + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
 	}
 	return name
-}
-
-func cleanName(s string) string {
-	// Replace spaces with dots
-	s = strings.ReplaceAll(s, " ", ".")
-	// Remove problematic characters
-	re := regexp.MustCompile(`[^a-zA-Z0-9.]`)
-	s = re.ReplaceAllString(s, "")
-	// Clean up multiple dots
-	reDots := regexp.MustCompile(`\.+`)
-	return strings.Trim(reDots.ReplaceAllString(s, "."), ".")
 }
 
 func fakenzb(w http.ResponseWriter, u url.URL) {
