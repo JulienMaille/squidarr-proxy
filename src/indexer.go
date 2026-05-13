@@ -175,6 +175,7 @@ func music(w http.ResponseWriter, u url.URL) {
 							{Name: "publisher", Value: "Epic Music"},
 							{Name: "year", Value: "2011"},
 							{Name: "tracks", Value: "track one|track two|track three"},
+							{Name: "duration", Value: "3600"},
 							{Name: "coverurl", Value: "http://servername.com/covers/music/12345.jpg"},
 							{Name: "review", Value: "This album is great"},
 						},
@@ -218,21 +219,25 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 			fmt.Println(err)
 			return Albums
 		}
+		bodyStr := string(bodyBytes)
 		//check the number of results and modify limit to avoid unnecessary requests
 		//lidarr seems to always start with 100
-		total := int(gjson.Get(string(bodyBytes), "data.albums.total").Int())
+		total := int(gjson.Get(bodyStr, "data.albums.total").Int())
 		if total == 0 {
-			total = int(gjson.Get(string(bodyBytes), "data.total").Int())
+			total = int(gjson.Get(bodyStr, "data.total").Int())
 		}
 		if total == 0 {
-		    // if total is 0, let's just see how many items are returned in data.albums.items
-		    total = len(gjson.Get(string(bodyBytes), "data.albums.items").Array())
+			// if total is 0, let's just see how many items are returned in data.albums.items
+			total = len(gjson.Get(bodyStr, "data.albums.items").Array())
 		}
-		if total < limit {
+		if total < limit && total > 0 {
 			limit = total
 		}
 		//iterate over each album and create an Album struct object from it
-		result := gjson.Get(string(bodyBytes), "data.albums.items")
+		result := gjson.Get(bodyStr, "data.albums.items")
+		if !result.Exists() {
+			result = gjson.Get(bodyStr, "data.items")
+		}
 		result.ForEach(func(key, value gjson.Result) bool {
 			var album Album
 			typ := value.Get("type").String()
@@ -247,21 +252,39 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 				return true
 			}
 
-			var resultString string = content.String()
-			album.Artist = gjson.Get(resultString, "artist.name").String()
-			album.Title = gjson.Get(resultString, "title").String()
-			album.Edition = gjson.Get(resultString, "version").String()
-			album.ReleaseDate = gjson.Get(resultString, "released_at").Int()
-			album.Publisher = gjson.Get(resultString, "label.name").String()
-			album.CoverUrl = gjson.Get(resultString, "image.small").String()
-			album.SamplingRate = int64(gjson.Get(resultString, "maximum_sampling_rate").Float())
-			album.BitDepth = gjson.Get(resultString, "maximum_bit_depth").Int()
-			album.Id = gjson.Get(resultString, "id").String()
-			album.NumTracks = gjson.Get(resultString, "tracks_count").Int()
-			album.Channels = gjson.Get(resultString, "maximum_channel_count").Int()
-			album.Duration = gjson.Get(resultString, "duration").Int()
-			album.Genre = gjson.Get(resultString, "genre.name").String()
-			album.QobuzUrl = gjson.Get(resultString, "url").String()
+			if !content.IsObject() {
+				return true
+			}
+
+			album.Artist = content.Get("artist.name").String()
+			album.Title = content.Get("title").String()
+			album.Edition = content.Get("version").String()
+			album.ReleaseDate = content.Get("released_at").Int()
+			album.Publisher = content.Get("label.name").String()
+			album.CoverUrl = content.Get("image.small").String()
+
+			samplingRate := content.Get("maximum_sampling_rate").Float()
+			if samplingRate < 1000 && samplingRate > 0 {
+				samplingRate *= 1000
+			}
+			album.SamplingRate = int64(samplingRate)
+
+			album.BitDepth = content.Get("maximum_bit_depth").Int()
+			album.Id = content.Get("id").String()
+			album.NumTracks = content.Get("tracks_count").Int()
+			album.Channels = content.Get("maximum_channel_count").Int()
+			album.Duration = content.Get("duration").Int()
+
+			if album.Duration == 0 && typ == "tracks" {
+				album.Duration = value.Get("content.duration").Int()
+			}
+			if album.Duration == 0 {
+				album.Duration = 1 // Fallback to avoid Lidarr duration 0 error
+			}
+
+			album.Genre = content.Get("genre.name").String()
+			album.QobuzUrl = content.Get("url").String()
+
 			//guesstimate filesize based on Sampling Rate, Bit Depth, Channel count and duration
 			//assuming all tracks of that album have the same specifications and that FLAC is 70% as large as WAV
 			// (Sampling Rate in Hz * Bit depth * channels * seconds) / 8 to get it from bits to bytes
@@ -270,7 +293,20 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 				album.Size = int64(320 * 1000 * album.Duration / 8)
 			} else {
 				// FLAC (default)
-				album.Size = int64(float64(((album.SamplingRate * 1000) * (album.BitDepth * album.Channels * album.Duration) / 8)) * 0.7)
+				// Use Hz for sampling rate calculation
+				sr := album.SamplingRate
+				if sr == 0 {
+					sr = 44100
+				}
+				bd := album.BitDepth
+				if bd == 0 {
+					bd = 16
+				}
+				ch := album.Channels
+				if ch == 0 {
+					ch = 2
+				}
+				album.Size = int64(float64((sr*bd*ch*album.Duration)/8) * 0.7)
 			}
 			Albums = append(Albums, album)
 			return true // keep iterating
@@ -291,7 +327,7 @@ func search(w http.ResponseWriter, u url.URL) {
 	if err != nil {
 		offset = 0
 	}
-	
+
 	quality := u.Query().Get("quality")
 	if quality == "" || quality == "default" {
 		quality = QualityId
@@ -367,7 +403,7 @@ func search(w http.ResponseWriter, u url.URL) {
 				Url:    "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + quality,
 				Type:   "application/x-nzb",
 			},
-			Attrs: append(categoryAttrs, NewznabAttr{Name: "genre", Value: album.Genre}),
+			Attrs: categoryAttrs,
 		})
 	}
 
@@ -391,10 +427,13 @@ func search(w http.ResponseWriter, u url.URL) {
 
 func releaseName(album Album, quality string) (name string) {
 	release := time.Unix(album.ReleaseDate, 0)
+	samplingRateKHz := float64(album.SamplingRate) / 1000.0
+	samplingRateStr := strconv.FormatFloat(samplingRateKHz, 'f', -1, 64)
+
 	if quality == "5" {
 		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
 	} else {
-		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + strconv.FormatInt(album.SamplingRate, 10) + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + samplingRateStr + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
 	}
 	return name
 }
