@@ -308,6 +308,9 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 				}
 				album.Size = int64(float64((sr*bd*ch*album.Duration)/8) * 0.7)
 			}
+			if Debug {
+				fmt.Printf("Parsed Album: Title: %s, Artist: %s, Duration: %d, SR: %d, BD: %d\n", album.Title, album.Artist, album.Duration, album.SamplingRate, album.BitDepth)
+			}
 			Albums = append(Albums, album)
 			return true // keep iterating
 		})
