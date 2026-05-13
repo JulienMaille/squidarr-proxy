@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -365,6 +367,7 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "files", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
+				{Name: "length", Value: strconv.FormatInt(album.Duration, 10)},
 				{Name: "year", Value: yearStr},
 				{Name: "publisher", Value: album.Publisher},
 				{Name: "coverurl", Value: album.CoverUrl},
@@ -382,6 +385,7 @@ func search(w http.ResponseWriter, u url.URL) {
 				{Name: "tracks", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "files", Value: strconv.FormatInt(album.NumTracks, 10)},
 				{Name: "duration", Value: strconv.FormatInt(album.Duration, 10)},
+				{Name: "length", Value: strconv.FormatInt(album.Duration, 10)},
 				{Name: "year", Value: yearStr},
 				{Name: "publisher", Value: album.Publisher},
 				{Name: "coverurl", Value: album.CoverUrl},
@@ -430,15 +434,30 @@ func search(w http.ResponseWriter, u url.URL) {
 
 func releaseName(album Album, quality string) (name string) {
 	release := time.Unix(album.ReleaseDate, 0)
-	samplingRateKHz := float64(album.SamplingRate) / 1000.0
-	samplingRateStr := strconv.FormatFloat(samplingRateKHz, 'f', -1, 64)
+
+	// Sanitize and dot-ify Artist and Title
+	artist := cleanName(album.Artist)
+	title := cleanName(album.Title)
 
 	if quality == "5" {
-		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+		name = fmt.Sprintf("%s.%s.%d.WEB.320.MP3-SQUIDWTF", artist, title, release.Year())
 	} else {
-		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + samplingRateStr + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+		samplingRateKHz := float64(album.SamplingRate) / 1000.0
+		samplingRateStr := strconv.FormatFloat(samplingRateKHz, 'f', -1, 64)
+		name = fmt.Sprintf("%s.%s.%d.WEB.%sBIT.%sKHZ.FLAC-SQUIDWTF", artist, title, release.Year(), strconv.FormatInt(album.BitDepth, 10), samplingRateStr)
 	}
 	return name
+}
+
+func cleanName(s string) string {
+	// Replace spaces with dots
+	s = strings.ReplaceAll(s, " ", ".")
+	// Remove problematic characters
+	re := regexp.MustCompile(`[^a-zA-Z0-9.]`)
+	s = re.ReplaceAllString(s, "")
+	// Clean up multiple dots
+	reDots := regexp.MustCompile(`\.+`)
+	return strings.Trim(reDots.ReplaceAllString(s, "."), ".")
 }
 
 func fakenzb(w http.ResponseWriter, u url.URL) {
