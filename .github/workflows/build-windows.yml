@@ -31,3 +31,4 @@ jobs:
         path: |
           squidarr-proxy.exe
           start_squidarr.bat
+          config.env.example
