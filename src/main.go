@@ -17,6 +17,7 @@ var ApiKey string
 var QualityId string
 var FileExtension string
 var Debug bool
+var QobuzToken string
 
 func apiRequest(endpoint string) (*http.Response, error) {
 	url := ApiLink + endpoint
@@ -65,6 +66,11 @@ func main() {
 	// ApiLink = getEnv("API_LINK", "https://qobuz.squid.wtf/api")
 	ApiLink = getEnv("API_LINK", "https://trypt-hifi-dl-456461932686.us-west1.run.app/api")
 	ApiKey = getEnv("API_KEY", "")
+	QobuzToken = getEnv("QOBUZ_TOKEN", "")
+
+	if QobuzToken != "" {
+		fmt.Println("Qobuz token configured, will use official API")
+	}
 
 	Debug = getEnv("DEBUG", "false") == "true"
 	quality := getEnv("QUALITY", "flac")

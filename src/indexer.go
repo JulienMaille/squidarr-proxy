@@ -191,8 +191,6 @@ func music(w http.ResponseWriter, u url.URL) {
 }
 
 func fetchAlbums(query string, limit int, offset int, qualityParam string) []Album {
-	var Albums []Album
-
 	quality := qualityParam
 	if quality == "" || quality == "default" {
 		quality = QualityId
@@ -202,9 +200,89 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 		quality = "7"
 	}
 
+	albums := fetchAlbumsOfficial(query, limit)
+	if len(albums) == 0 {
+		albums = fetchAlbumsProxy(query, limit, offset)
+	} else if Debug {
+		fmt.Printf("Official API search returned %d results\n", len(albums))
+	}
+	return albums
+}
+
+func fetchAlbumsOfficial(query string, limit int) []Album {
+	if QobuzToken == "" {
+		return nil
+	}
+	limitStr := strconv.Itoa(limit)
+	resp, err := qobuzRequest("GET", "catalog/search", map[string]string{"query": query, "limit": limitStr, "offset": "0"})
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return nil
+	}
+	bodyStr := string(body)
+
+	var albums []Album
+	result := gjson.Get(bodyStr, "albums.items")
+	result.ForEach(func(key, value gjson.Result) bool {
+		var a Album
+		a.Artist = value.Get("artist.name").String()
+		a.Title = value.Get("title").String()
+		a.Edition = value.Get("version").String()
+		a.Publisher = value.Get("label.name").String()
+		a.CoverUrl = value.Get("image.small").String()
+
+		sr := value.Get("maximum_sampling_rate").Float()
+		if sr < 1000 && sr > 0 {
+			sr *= 1000
+		}
+		a.SamplingRate = int64(sr)
+		a.BitDepth = value.Get("maximum_bit_depth").Int()
+		a.Id = value.Get("id").String()
+		a.NumTracks = value.Get("tracks_count").Int()
+		a.Channels = value.Get("maximum_channel_count").Int()
+		a.Duration = value.Get("duration").Int()
+		a.Genre = value.Get("genre.name").String()
+		a.QobuzUrl = value.Get("url").String()
+
+		rd := value.Get("release_date_original").String()
+		if rd != "" {
+			if t, err := time.Parse("2006-01-02", rd); err == nil {
+				a.ReleaseDate = t.Unix()
+			}
+		}
+		if a.ReleaseDate == 0 {
+			a.ReleaseDate = value.Get("released_at").Int()
+		}
+
+		sr2 := a.SamplingRate
+		if sr2 == 0 {
+			sr2 = 44100
+		}
+		bd := a.BitDepth
+		if bd == 0 {
+			bd = 16
+		}
+		ch := a.Channels
+		if ch == 0 {
+			ch = 2
+		}
+		a.Size = int64(float64((sr2*bd*ch*a.Duration)/8) * 0.7)
+
+		albums = append(albums, a)
+		return true
+	})
+	return albums
+}
+
+func fetchAlbumsProxy(query string, limit int, offset int) []Album {
+	var Albums []Album
+
 	escapedQuery := url.QueryEscape(query)
 
-	// The API can handle more than 10 items per request. We'll use a batch size of 50.
 	batchSize := 50
 	for i := 0; i < limit; i += batchSize {
 		var endpoint string = "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
@@ -213,27 +291,22 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 			fmt.Println(err)
 			return Albums
 		}
-		//making the request body usable
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Println(err)
 			return Albums
 		}
 		bodyStr := string(bodyBytes)
-		//check the number of results and modify limit to avoid unnecessary requests
-		//lidarr seems to always start with 100
 		total := int(gjson.Get(bodyStr, "data.albums.total").Int())
 		if total == 0 {
 			total = int(gjson.Get(bodyStr, "data.total").Int())
 		}
 		if total == 0 {
-			// if total is 0, let's just see how many items are returned in data.albums.items
 			total = len(gjson.Get(bodyStr, "data.albums.items").Array())
 		}
 		if total < limit && total > 0 {
 			limit = total
 		}
-		//iterate over each album and create an Album struct object from it
 		result := gjson.Get(bodyStr, "data.albums.items")
 		if !result.Exists() {
 			result = gjson.Get(bodyStr, "data.items")
@@ -282,15 +355,9 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 			album.Genre = content.Get("genre.name").String()
 			album.QobuzUrl = content.Get("url").String()
 
-			//guesstimate filesize based on Sampling Rate, Bit Depth, Channel count and duration
-			//assuming all tracks of that album have the same specifications and that FLAC is 70% as large as WAV
-			// (Sampling Rate in Hz * Bit depth * channels * seconds) / 8 to get it from bits to bytes
 			if quality == "5" {
-				// MP3 320kbps
 				album.Size = int64(320 * 1000 * album.Duration / 8)
 			} else {
-				// FLAC (default)
-				// Use Hz for sampling rate calculation
 				sr := album.SamplingRate
 				if sr == 0 {
 					sr = 44100
@@ -306,7 +373,7 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 				album.Size = int64(float64((sr*bd*ch*album.Duration)/8) * 0.7)
 			}
 			Albums = append(Albums, album)
-			return true // keep iterating
+			return true
 		})
 	}
 	return Albums

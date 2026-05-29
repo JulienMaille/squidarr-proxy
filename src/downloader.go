@@ -66,9 +66,10 @@ type Download struct {
 	numTracks  int
 	mediaCount int
 	label      string
-	downloaded int
-	FileName   string
-	Files      []File
+	downloaded    int
+	skippedTracks int
+	FileName      string
+	Files         []File
 }
 
 var Downloads map[string]*Download = make(map[string]*Download)
@@ -201,38 +202,68 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		quality = QualityId
 	}
 
-	var endpoint string = "/get-album?album_id=" + Id
-	resp, err := apiRequest(endpoint)
-	if err != nil {
-		fmt.Println(err)
-		return
+	var bodyStr string
+	if QobuzToken != "" {
+		body, err := qobuzGetAlbum(Id)
+		if err == nil {
+			bodyStr = body
+		} else if Debug {
+			fmt.Println("Official API album/get failed, falling back to proxy:", err)
+		}
 	}
-	//making the request body usable
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println(err)
-		return
+	if bodyStr == "" {
+		var endpoint string = "/get-album?album_id=" + Id
+		resp, err := apiRequest(endpoint)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		bodyStr = string(bodyBytes)
 	}
-	bodyStr := string(bodyBytes)
 
-	download.Artist = gjson.Get(bodyStr, "data.artist.name").String()
-	download.Album = gjson.Get(bodyStr, "data.title").String()
-	download.Comment = gjson.Get(bodyStr, "data.version").String()
-	download.Genre = gjson.Get(bodyStr, "data.genre.name").String()
-	releaseDate := gjson.Get(bodyStr, "data.release_date_original").String()
+	download.Artist = gjson.Get(bodyStr, "artist.name").String()
+	download.Album = gjson.Get(bodyStr, "title").String()
+	download.Comment = gjson.Get(bodyStr, "version").String()
+	releaseDate := gjson.Get(bodyStr, "release_date_original").String()
+	download.Genre = gjson.Get(bodyStr, "genre.name").String()
+	if releaseDate == "" && bodyStr != "" {
+		releaseDate = gjson.Get(bodyStr, "data.release_date_original").String()
+		download.Artist = gjson.Get(bodyStr, "data.artist.name").String()
+		download.Album = gjson.Get(bodyStr, "data.title").String()
+		download.Comment = gjson.Get(bodyStr, "data.version").String()
+		download.Genre = gjson.Get(bodyStr, "data.genre.name").String()
+		download.UPC = gjson.Get(bodyStr, "data.upc").String()
+		download.CoverUrl = gjson.Get(bodyStr, "data.image.large").String()
+		download.numTracks = int(gjson.Get(bodyStr, "data.tracks_count").Int())
+		download.mediaCount = int(gjson.Get(bodyStr, "data.media_count").Int())
+		download.label = gjson.Get(bodyStr, "data.copyright").String()
+	} else {
+		download.UPC = gjson.Get(bodyStr, "upc").String()
+		download.CoverUrl = gjson.Get(bodyStr, "image.large").String()
+		download.numTracks = int(gjson.Get(bodyStr, "tracks_count").Int())
+		download.mediaCount = int(gjson.Get(bodyStr, "media_count").Int())
+		download.label = gjson.Get(bodyStr, "label.name").String()
+	}
 	if len(releaseDate) >= 4 {
 		download.Year = releaseDate[:4]
 	}
-	download.UPC = gjson.Get(bodyStr, "data.upc").String()
-	download.CoverUrl = gjson.Get(bodyStr, "data.image.large").String()
 	if download.Comment == "null" || download.Comment == "" {
 		download.Comment = ""
 	}
-	download.numTracks = int(gjson.Get(bodyStr, "data.tracks_count").Int())
-	download.mediaCount = int(gjson.Get(bodyStr, "data.media_count").Int())
-	download.label = gjson.Get(bodyStr, "data.copyright").String()
-	result := gjson.Get(bodyStr, "data.tracks.items")
-	result.ForEach(func(key, value gjson.Result) bool {
+
+	var itemsResult gjson.Result
+	if QobuzToken != "" {
+		itemsResult = gjson.Get(bodyStr, "tracks.items")
+	}
+	if !itemsResult.Exists() {
+		itemsResult = gjson.Get(bodyStr, "data.tracks.items")
+	}
+	itemsResult.ForEach(func(key, value gjson.Result) bool {
 		var track File
 		var valueString = value.String()
 		track.Id = int(gjson.Get(valueString, "id").Int())
@@ -241,32 +272,25 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		track.mediaNumber = gjson.Get(valueString, "media_number").String()
 		track.isrc = gjson.Get(valueString, "isrc").String()
 		track.completed = false
-		var endpoint string = "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
-		resp, err := apiRequest(endpoint)
-		if err != nil {
-			fmt.Println(err)
-			return false
-		}
-		//making the request body usable
-		dlBodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Println(err)
-			return false
-		}
-		track.DownloadLink = gjson.Get(string(dlBodyBytes), "data.url").String()
+
+		track.DownloadLink = getDownloadUrlOfficial(track.Id, quality)
 		if track.DownloadLink == "" {
-			fmt.Println("squid.wtf didn't give a link for track " + track.Name)
-			fmt.Println("This is most likely an error with squid.wtf, Qobuz-DL or Qobuz itself...")
-			fmt.Println("Cancelling download...")
-			download.downloaded = -1
-			err := os.RemoveAll(DownloadPath + "/incomplete/" + Category + "/" + download.FileName)
+			var endpoint string = "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
+			resp, err := apiRequest(endpoint)
 			if err != nil {
-				fmt.Println("Couldn't delete folder " + download.FileName)
-				fmt.Println(err)
+				fmt.Println("Proxy download failed for track " + track.Name + ":", err)
+			} else {
+				dlBodyBytes, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				track.DownloadLink = gjson.Get(string(dlBodyBytes), "data.url").String()
 			}
-			return false
 		}
-		download.Files = append(download.Files, track)
+		if track.DownloadLink == "" {
+			fmt.Println("Couldn't get a download link for track " + track.Name + " (" + strconv.Itoa(track.Id) + "), skipping...")
+			download.skippedTracks += 1
+		} else {
+			download.Files = append(download.Files, track)
+		}
 		return true
 	})
 	Downloads[Id] = &download
@@ -430,6 +454,22 @@ func history(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func getDownloadUrlOfficial(trackId int, quality string) string {
+	if QobuzToken == "" {
+		return ""
+	}
+	resp, err := qobuzRequest("GET", "track/get", map[string]string{"track_id": strconv.Itoa(trackId)})
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	return gjson.Get(string(body), "sample").String()
+}
+
 func sanitizeFilename(name string) string {
 	// Forbidden characters on Windows: < > : " / \ | ? *
 	re := regexp.MustCompile(`[<>:"/\\|?*]`)
@@ -511,6 +551,9 @@ func startDownload(Id string) {
 	destFolder := filepath.Join(DownloadPath, "complete", Category, download.FileName)
 	if err := os.MkdirAll(filepath.Dir(destFolder), 0755); err != nil {
 		fmt.Printf("Error creating destination category folder: %v\n", err)
+	}
+	if download.skippedTracks > 0 {
+		fmt.Printf("Skipped %d track(s) with no download link\n", download.skippedTracks)
 	}
 	err = os.Rename(Folder, destFolder)
 	if err != nil {
