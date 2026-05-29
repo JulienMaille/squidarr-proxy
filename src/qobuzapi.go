@@ -76,9 +76,8 @@ func qobuzGetAlbum(albumId string) (string, error) {
 }
 
 func qobuzGetTrackDownloadUrl(trackId int, quality string) string {
-	qs := quality
-	if qs == "" {
-		qs = QualityId
+	if QobuzToken == "" {
+		return ""
 	}
 	resp, err := qobuzRequest("GET", "track/get", map[string]string{"track_id": strconv.Itoa(trackId)})
 	if err != nil {
@@ -90,49 +89,6 @@ func qobuzGetTrackDownloadUrl(trackId int, quality string) string {
 		return ""
 	}
 	return gjson.Get(string(body), "sample").String()
-}
-
-func qobuzFileUrl(trackId int, quality string) string {
-	if QobuzToken == "" {
-		return ""
-	}
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	params := map[string]string{
-		"track_id":  strconv.Itoa(trackId),
-		"format_id": quality,
-		"intent":    "stream",
-	}
-	var sortedArgs string
-	keys := []string{"format_id", "intent", "track_id"}
-	for _, k := range keys {
-		sortedArgs += k + params[k]
-	}
-	sigInput := "fileurl" + sortedArgs + ts + searchAppSecret
-	sig := fmt.Sprintf("%x", md5.Sum([]byte(sigInput)))
-
-	formData := "request_ts=" + ts + "&request_sig=" + sig + "&track_id=" + strconv.Itoa(trackId) + "&format_id=" + quality + "&intent=stream"
-	req, _ := http.NewRequest("POST", "https://www.qobuz.com/api.json/0.2/file/url", strings.NewReader(formData))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("X-App-Id", searchAppId)
-	req.Header.Set("X-User-Auth-Token", QobuzToken)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	respStr := string(body)
-	if resp.StatusCode != 200 {
-		if Debug {
-			fmt.Printf("file/url HTTP %d: %s\n", resp.StatusCode, respStr)
-		}
-		return ""
-	}
-	return gjson.Get(respStr, "url_template").String()
 }
 
 func sortStrings(s []string) {
