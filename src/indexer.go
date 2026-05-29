@@ -202,7 +202,7 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 
 	albums := fetchAlbumsOfficial(query, limit)
 	if len(albums) == 0 {
-		albums = fetchAlbumsProxy(query, limit, offset)
+		albums = fetchAlbumsProxy(query, limit, offset, quality)
 	} else if Debug {
 		fmt.Printf("Official API search returned %d results\n", len(albums))
 	}
@@ -278,7 +278,7 @@ func fetchAlbumsOfficial(query string, limit int) []Album {
 	return albums
 }
 
-func fetchAlbumsProxy(query string, limit int, offset int) []Album {
+func fetchAlbumsProxy(query string, limit int, offset int, quality string) []Album {
 	var Albums []Album
 
 	escapedQuery := url.QueryEscape(query)

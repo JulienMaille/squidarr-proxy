@@ -12,7 +12,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-var QobuzToken string
 var searchAppId = "712109809"
 var searchAppSecret = "589be88e4538daea11f509d29e4a23b1"
 
