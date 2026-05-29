@@ -458,6 +458,15 @@ func getDownloadUrlOfficial(trackId int, quality string) string {
 	if QobuzToken == "" {
 		return ""
 	}
+	qs := quality
+	if qs == "" {
+		qs = QualityId
+	}
+
+	if url := qobuzFileUrl(trackId, qs); url != "" {
+		return url
+	}
+
 	resp, err := qobuzRequest("GET", "track/get", map[string]string{"track_id": strconv.Itoa(trackId)})
 	if err != nil {
 		return ""
