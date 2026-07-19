@@ -12,7 +12,7 @@ services:
       # Alternatives:
       # - https://qobuz.kennyy.com.br/api
       # - https://qobuz.squid.wtf/api
-      - API_LINK=https://trypt-hifi-dl-456461932686.us-west1.run.app/api
+      - API_LINK=https://qobuz.squid.wtf/api
       # The API Key is the password to your instance, set when configuring indexer and downloader in Lidarr
       # Set any value you wish here, but do not leave it empty
       - API_KEY=

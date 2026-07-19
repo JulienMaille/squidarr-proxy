@@ -62,9 +62,10 @@ func main() {
 	Category = getEnv("CATEGORY", "music")
 	Port = getEnv("PORT", "8687")
 	// Alternative API links:
-	// ApiLink = getEnv("API_LINK", "https://qobuz.kennyy.com.br/api")
 	// ApiLink = getEnv("API_LINK", "https://qobuz.squid.wtf/api")
-	ApiLink = getEnv("API_LINK", "https://trypt-hifi-dl-456461932686.us-west1.run.app/api")
+	// ApiLink = getEnv("API_LINK", "https://qobuz-api1.onrender.com")
+	// ApiLink = getEnv("API_LINK", "https://trypt-hifi-dl-456461932686.us-west1.run.app")
+	ApiLink = getEnv("API_LINK", "https://qobuz-api.stremio123.duckdns.org")
 	ApiKey = getEnv("API_KEY", "")
 	QobuzToken = getEnv("QOBUZ_TOKEN", "")
 
@@ -130,6 +131,8 @@ func main() {
 
 	http.HandleFunc("/indexer", corsHandler(handleIndexerRequest))
 	http.HandleFunc("/downloader/api", corsHandler(handleDownloaderRequest))
+	http.HandleFunc("/api/download", corsHandler(handleSimpleDownload))
+	http.HandleFunc("/api/", corsHandler(handleSimpleDownload)) // also serve at /api/ for doc purposes
 	fmt.Println("Listening on port " + Port + "...")
 	http.ListenAndServe(":"+Port, nil)
 }

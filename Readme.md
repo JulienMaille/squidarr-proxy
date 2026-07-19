@@ -13,7 +13,7 @@ The following environment variables can be used to configure squidarr-proxy. You
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `API_LINK` | The API endpoint for metadata and download links. | `https://trypt-hifi-dl-456461932686.us-west1.run.app/api` |
+| `API_LINK` | The API endpoint for metadata and download links. | `https://qobuz.squid.wtf/api` |
 | `API_KEY` | Your unique API key for squidarr-proxy. | (none) |
 | `DOWNLOAD_PATH` | The path where music will be downloaded. | `/data/squidarr/` |
 | `QUALITY` | Download quality (`mp3-320`, `flac-lossless`, `flac-hi-res`). | `flac-hi-res` |
@@ -21,7 +21,7 @@ The following environment variables can be used to configure squidarr-proxy. You
 | `DEBUG` | Enable debug logging (`true`/`false`). | `false` |
 
 **API_LINK Alternatives:**
-- `https://qobuz.kennyy.com.br/api` (Old Kennyy API)
+- `https://qobuz.kennyy.com.br/api` (Kennyy API)
 - `https://qobuz.squid.wtf/api` (Squid.wtf API)
 
 ### Windows (No Docker)

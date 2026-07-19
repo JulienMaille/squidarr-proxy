@@ -108,6 +108,58 @@ func handleDownloaderRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleSimpleDownload(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("error: missing id parameter"))
+		return
+	}
+
+	quality := r.URL.Query().Get("quality")
+	if quality == "" {
+		quality = QualityId
+	}
+
+	fmt.Println("Triggering download for ID:", id, "Quality:", quality)
+
+	// If download already exists and is not finished, ignore
+	if d, ok := Downloads[id]; ok && d.downloaded != -1 && d.downloaded < d.numTracks {
+		_, _ = w.Write([]byte(`{"status": "already_queued"}`))
+		return
+	}
+
+	go func() {
+		var endpoint string = "/album/" + id
+		resp, err := apiRequest(endpoint)
+		if err != nil {
+			fmt.Println("Error fetching album info:", err)
+			return
+		}
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		bodyStr := string(bodyBytes)
+
+		artist := gjson.Get(bodyStr, "artist.name").String()
+		album := gjson.Get(bodyStr, "title").String()
+		version := gjson.Get(bodyStr, "version").String()
+		numTracks := int(gjson.Get(bodyStr, "tracks_count").Int())
+
+		filename := sanitizeFilename(artist + " - " + album)
+		if version != "" && version != "null" {
+			filename += " (" + version + ")"
+		}
+
+		generateDownload(filename, id, numTracks, quality)
+		if Downloads[id] != nil && Downloads[id].downloaded != -1 {
+			startDownload(id)
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status": "queued", "id": "` + id + `"}`))
+}
+
 func get_config(w http.ResponseWriter, u url.URL) {
 	resp := ConfigResponse{
 		Config: Config{
@@ -212,7 +264,7 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		}
 	}
 	if bodyStr == "" {
-		var endpoint string = "/get-album?album_id=" + Id
+		var endpoint string = "/album/" + Id
 		resp, err := apiRequest(endpoint)
 		if err != nil {
 			fmt.Println(err)
@@ -275,14 +327,14 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 
 		track.DownloadLink = getDownloadUrlOfficial(track.Id, quality)
 		if track.DownloadLink == "" {
-			var endpoint string = "/download-music?track_id=" + strconv.Itoa(track.Id) + "&quality=" + quality
+			var endpoint string = "/stream/" + strconv.Itoa(track.Id) + "?format_id=" + quality
 			resp, err := apiRequest(endpoint)
 			if err != nil {
 				fmt.Println("Proxy download failed for track " + track.Name + ":", err)
 			} else {
 				dlBodyBytes, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				track.DownloadLink = gjson.Get(string(dlBodyBytes), "data.url").String()
+				track.DownloadLink = gjson.Get(string(dlBodyBytes), "url").String()
 			}
 		}
 		if track.DownloadLink == "" {

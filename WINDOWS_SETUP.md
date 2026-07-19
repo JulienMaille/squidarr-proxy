@@ -43,11 +43,10 @@ QUALITY=flac
 TZ=Europe/Berlin
 
 # The API endpoint for metadata and download links.
-# Default: https://trypt-hifi-dl-456461932686.us-west1.run.app/api
+# Default: https://qobuz.squid.wtf/api
 # Alternatives:
 # API_LINK=https://qobuz.kennyy.com.br/api
-# API_LINK=https://qobuz.squid.wtf/api
-API_LINK=https://trypt-hifi-dl-456461932686.us-west1.run.app/api
+API_LINK=https://qobuz.squid.wtf/api
 ```
 
 ## Step 4: Configure Lidarr

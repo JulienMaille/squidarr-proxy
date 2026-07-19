@@ -285,7 +285,7 @@ func fetchAlbumsProxy(query string, limit int, offset int, quality string) []Alb
 
 	batchSize := 50
 	for i := 0; i < limit; i += batchSize {
-		var endpoint string = "/get-music?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
+		var endpoint string = "/search?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
 		resp, err := apiRequest(endpoint)
 		if err != nil {
 			fmt.Println(err)
@@ -297,34 +297,24 @@ func fetchAlbumsProxy(query string, limit int, offset int, quality string) []Alb
 			return Albums
 		}
 		bodyStr := string(bodyBytes)
-		total := int(gjson.Get(bodyStr, "data.albums.total").Int())
+		total := int(gjson.Get(bodyStr, "albums.total").Int())
 		if total == 0 {
-			total = int(gjson.Get(bodyStr, "data.total").Int())
+			total = int(gjson.Get(bodyStr, "total").Int())
 		}
 		if total == 0 {
-			total = len(gjson.Get(bodyStr, "data.albums.items").Array())
+			total = len(gjson.Get(bodyStr, "albums.items").Array())
 		}
 		if total < limit && total > 0 {
 			limit = total
 		}
-		result := gjson.Get(bodyStr, "data.albums.items")
+		result := gjson.Get(bodyStr, "albums.items")
 		if !result.Exists() {
-			result = gjson.Get(bodyStr, "data.items")
+			result = gjson.Get(bodyStr, "items")
 		}
 		result.ForEach(func(key, value gjson.Result) bool {
 			var album Album
-			typ := value.Get("type").String()
-			var content gjson.Result
-			if typ == "albums" {
-				content = value.Get("content")
-			} else if typ == "tracks" {
-				content = value.Get("content.album")
-			} else if typ == "" {
-				content = value
-			} else {
-				return true
-			}
-
+			// DuckDNS API returns items directly (no type/content wrapper)
+			var content gjson.Result = value
 			if !content.IsObject() {
 				return true
 			}
@@ -347,10 +337,6 @@ func fetchAlbumsProxy(query string, limit int, offset int, quality string) []Alb
 			album.NumTracks = content.Get("tracks_count").Int()
 			album.Channels = content.Get("maximum_channel_count").Int()
 			album.Duration = content.Get("duration").Int()
-
-			if album.Duration == 0 && typ == "tracks" {
-				album.Duration = value.Get("content.duration").Int()
-			}
 
 			album.Genre = content.Get("genre.name").String()
 			album.QobuzUrl = content.Get("url").String()
