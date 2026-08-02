@@ -1,0 +1,6 @@
+# Build artifacts
+*.exe
+# Runtime / temp
+*.log
+dl_*.tsv
+run_batch.sh

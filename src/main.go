@@ -15,7 +15,6 @@ var Port string
 var ApiLink string
 var ApiKey string
 var QualityId string
-var FileExtension string
 var Debug bool
 var QobuzToken string
 
@@ -76,14 +75,11 @@ func main() {
 	Debug = getEnv("DEBUG", "false") == "true"
 	quality := getEnv("QUALITY", "flac")
 	if quality == "mp3-320" {
-		QualityId = "5" // LOW in Monochrome API
-		FileExtension = ".mp3"
+		QualityId = "5"
 	} else if quality == "flac-lossless" {
-		QualityId = "7" // LOSSLESS in Monochrome API
-		FileExtension = ".flac"
+		QualityId = "7"
 	} else {
-		QualityId = "27" // HI_RES_LOSSLESS in Monochrome API
-		FileExtension = ".flac"
+		QualityId = "27"
 	}
 
 	//create folders if they don't exist yet

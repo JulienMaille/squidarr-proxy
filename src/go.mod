@@ -3,7 +3,6 @@ module squidarr-proxy
 go 1.24.4
 
 require (
-	github.com/cavaliergopher/grab/v3 v3.0.1
 	github.com/tidwall/gjson v1.18.0
 	go.senan.xyz/taglib v0.7.0
 )

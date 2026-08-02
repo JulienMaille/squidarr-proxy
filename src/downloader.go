@@ -11,8 +11,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
-	"github.com/cavaliergopher/grab/v3"
 	"github.com/tidwall/gjson"
 	"go.senan.xyz/taglib"
 )
@@ -55,20 +56,21 @@ type File struct {
 }
 
 type Download struct {
-	Id         string
-	Artist     string
-	Album      string
-	Comment    string
-	Genre      string
-	Year       string
-	UPC        string
-	CoverUrl   string
-	numTracks  int
-	mediaCount int
-	label      string
+	Id            string
+	Artist        string
+	Album         string
+	Comment       string
+	Genre         string
+	Year          string
+	UPC           string
+	CoverUrl      string
+	numTracks     int
+	mediaCount    int
+	label         string
 	downloaded    int
 	skippedTracks int
 	FileName      string
+	Quality       string
 	Files         []File
 }
 
@@ -120,8 +122,13 @@ func handleSimpleDownload(w http.ResponseWriter, r *http.Request) {
 	if quality == "" {
 		quality = QualityId
 	}
+	artist := r.URL.Query().Get("artist")
+	album := r.URL.Query().Get("album")
+	// Heal accents sent as Latin-1 instead of UTF-8 (see fixEncoding).
+	artist = fixEncoding(artist)
+	album = fixEncoding(album)
 
-	fmt.Println("Triggering download for ID:", id, "Quality:", quality)
+	fmt.Println("Triggering download for ID:", id, "Quality:", quality, "Artist:", artist, "Album:", album)
 
 	// If download already exists and is not finished, ignore
 	if d, ok := Downloads[id]; ok && d.downloaded != -1 && d.downloaded < d.numTracks {
@@ -130,27 +137,30 @@ func handleSimpleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		var endpoint string = "/album/" + id
-		resp, err := apiRequest(endpoint)
-		if err != nil {
-			fmt.Println("Error fetching album info:", err)
-			return
-		}
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		bodyStr := string(bodyBytes)
+		version := ""
+		numTracks := 0
 
-		artist := gjson.Get(bodyStr, "artist.name").String()
-		album := gjson.Get(bodyStr, "title").String()
-		version := gjson.Get(bodyStr, "version").String()
-		numTracks := int(gjson.Get(bodyStr, "tracks_count").Int())
+		if artist != "" && album != "" {
+			albumJSON, err := qobuzSearchAlbum(id, artist, album)
+			if err == nil {
+				artist = gjson.Get(albumJSON, "artist.name").String()
+				album = gjson.Get(albumJSON, "title").String()
+				version = gjson.Get(albumJSON, "version").String()
+				numTracks = int(gjson.Get(albumJSON, "tracks_count").Int())
+			} else if Debug {
+				fmt.Println("Qobuz album search failed:", err)
+			}
+		}
 
 		filename := sanitizeFilename(artist + " - " + album)
 		if version != "" && version != "null" {
 			filename += " (" + version + ")"
 		}
+		if filename == sanitizeFilename(" - ") {
+			filename = id
+		}
 
-		generateDownload(filename, id, numTracks, quality)
+		generateDownload(filename, id, numTracks, quality, artist, album)
 		if Downloads[id] != nil && Downloads[id].downloaded != -1 {
 			startDownload(id)
 		}
@@ -202,35 +212,58 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	}
 	bodyStr := string(body)
 
-	// Robustly find filename in multipart body
 	reName := regexp.MustCompile(`filename="?([^"]+)\.nzb"?`)
-	nameMatch := reName.FindStringSubmatch(bodyStr)
+
 	var filename string
-	if len(nameMatch) > 1 {
+	if nameMatch := reName.FindStringSubmatch(bodyStr); len(nameMatch) > 1 {
 		filename = nameMatch[1]
-	} else {
+	}
+	if filename == "" {
 		filename = "download"
 	}
 	filename = sanitizeFilename(filename)
 
-	// Find Id and NumTracks inside the NZB XML comments
-	reId := regexp.MustCompile(`<!--\s+([a-zA-Z0-9]+)\s+-->`)
-	matches := reId.FindAllStringSubmatch(bodyStr, -1)
+	// Extract metadata from NZB XML comments (<!-- ... -->), in the order
+	// written by fakenzb: QobuzId, NumTracks, Quality, Artist, Album.
+	// Search the whole body (line indexes are fragile when the NZB layout changes).
+	reComment := regexp.MustCompile(`<!--\s+([^<]+?)\s+-->`)
+	var Id string
+	var NumTracks int
+	var quality string
+	var artist string
+	var album string
+	for _, line := range strings.Split(bodyStr, "\n") {
+		m := reComment.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		val := strings.TrimSpace(m[1])
+		// Numeric comments in order: id, track count, quality
+		if num, err := strconv.Atoi(val); err == nil {
+			if Id == "" {
+				Id = val
+			} else if NumTracks == 0 {
+				NumTracks = num
+			} else if quality == "" {
+				quality = val
+			}
+			continue
+		}
+		// Non-numeric comments in order: artist, album
+		if artist == "" {
+			artist = val
+		} else if album == "" {
+			album = val
+		}
+	}
 
-	if len(matches) < 2 {
+	if Id == "" || NumTracks == 0 {
 		fmt.Println("/downloader/api/addfile Failed to find ID or NumTracks in body")
 		return
 	}
 
-	var Id = matches[0][1]
-	var NumTracks, _ = strconv.Atoi(matches[1][1])
-	var quality = ""
-	if len(matches) > 2 {
-		quality = matches[2][1]
-	}
-
-	fmt.Println("Adding download:", filename, "ID:", Id, "Tracks:", NumTracks, "Quality:", quality)
-	generateDownload(filename, Id, NumTracks, quality)
+	fmt.Println("Adding download:", filename, "ID:", Id, "Tracks:", NumTracks, "Quality:", quality, "Artist:", artist, "Album:", album)
+	generateDownload(filename, Id, NumTracks, quality, artist, album)
 
 	//send response using QobuzId as nzo_id
 	w.Write([]byte("{\n" +
@@ -242,51 +275,83 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func generateDownload(filename string, Id string, numTracks int, qualityParam string) {
+func generateDownload(filename string, Id string, numTracks int, qualityParam string, artistHint string, albumHint string) {
+	// Heal accents that may have arrived as Latin-1 instead of UTF-8.
+	artistHint = fixEncoding(artistHint)
+	albumHint = fixEncoding(albumHint)
 	var download Download
 	download.Id = Id
 	download.numTracks = numTracks
 	download.FileName = filename
 	download.downloaded = 0
-
 	quality := qualityParam
 	if quality == "" {
 		quality = QualityId
 	}
+	download.Quality = quality
 
 	var bodyStr string
+	var tracksJSON string
+	var albumItems gjson.Result
 	if QobuzToken != "" {
-		body, err := qobuzGetAlbum(Id)
-		if err == nil {
-			bodyStr = body
-		} else if Debug {
-			fmt.Println("Official API album/get failed, falling back to proxy:", err)
+		// Preferred: album/get returns the authoritative, COMPLETE track list.
+		// track/search only surfaces a subset of an album (e.g. 19 of 24 tracks),
+		// which was the regression that made multi-track albums "fail to download".
+		// album/get needs the ALPHANUMERIC catalog id (the search result's "id",
+		// e.g. d8xwaf7svx5m8), NOT the numeric qobuz_id, and must not be signed —
+		// same pattern as monochrome / qobuz-tidal-eclipse.
+		if artistHint != "" && albumHint != "" {
+			if albumJSON, err := qobuzSearchAlbum(Id, artistHint, albumHint); err == nil {
+				bodyStr = albumJSON
+				if catalogID := gjson.Get(albumJSON, "id").String(); catalogID != "" {
+					if fullJSON, aerr := qobuzGetAlbum(catalogID); aerr == nil {
+						bodyStr = fullJSON
+						albumItems = gjson.Get(bodyStr, "tracks.items")
+						if Debug {
+							fmt.Println("Qobuz album/get found", len(albumItems.Array()), "tracks for album", Id)
+						}
+					} else if Debug {
+						fmt.Println("Qobuz album/get failed:", aerr)
+					}
+				}
+			} else if Debug {
+				fmt.Println("Qobuz album search failed:", err)
+			}
 		}
-	}
-	if bodyStr == "" {
-		var endpoint string = "/album/" + Id
-		resp, err := apiRequest(endpoint)
-		if err != nil {
-			fmt.Println(err)
-			return
+
+		// Fallback when album/get isn't usable: enumerate via track/search.
+		if !albumItems.Exists() {
+			if tracksStr, terr := qobuzGetTracksByAlbum(Id, artistHint, albumHint); terr == nil {
+				tracksJSON = tracksStr
+				if Debug {
+					fmt.Println("Qobuz track search found", len(gjson.Parse(tracksJSON).Array()), "tracks for album", Id)
+				}
+			} else if Debug {
+				fmt.Println("Qobuz track search failed:", terr)
+			}
 		}
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		bodyStr = string(bodyBytes)
 	}
 
-	download.Artist = gjson.Get(bodyStr, "artist.name").String()
+	if artistHint != "" {
+		download.Artist = artistHint
+	} else {
+		download.Artist = gjson.Get(bodyStr, "artist.name").String()
+	}
 	download.Album = gjson.Get(bodyStr, "title").String()
+	if download.Album == "" {
+		download.Album = albumHint
+	}
 	download.Comment = gjson.Get(bodyStr, "version").String()
 	releaseDate := gjson.Get(bodyStr, "release_date_original").String()
 	download.Genre = gjson.Get(bodyStr, "genre.name").String()
 	if releaseDate == "" && bodyStr != "" {
 		releaseDate = gjson.Get(bodyStr, "data.release_date_original").String()
-		download.Artist = gjson.Get(bodyStr, "data.artist.name").String()
-		download.Album = gjson.Get(bodyStr, "data.title").String()
+		if download.Artist == "" {
+			download.Artist = gjson.Get(bodyStr, "data.artist.name").String()
+		}
+		if download.Album == "" {
+			download.Album = gjson.Get(bodyStr, "data.title").String()
+		}
 		download.Comment = gjson.Get(bodyStr, "data.version").String()
 		download.Genre = gjson.Get(bodyStr, "data.genre.name").String()
 		download.UPC = gjson.Get(bodyStr, "data.upc").String()
@@ -304,12 +369,41 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 	if len(releaseDate) >= 4 {
 		download.Year = releaseDate[:4]
 	}
+	//Rebuild folder name to match the release name format served by the indexer
+	if download.Artist != "" && download.Album != "" {
+		download.FileName = sanitizeFilename(download.Artist + "-" + download.Album)
+		if download.Quality == "5" {
+			download.FileName += "-WEB-320-MP3-" + download.Year + "-SQUIDWTF"
+		} else {
+			sr := gjson.Get(bodyStr, "maximum_sampling_rate").Float()
+			if sr < 1000 && sr > 0 {
+				sr *= 1000
+			}
+			if sr == 0 {
+				sr = 44100
+			}
+			bd := gjson.Get(bodyStr, "maximum_bit_depth").Int()
+			if bd == 0 {
+				bd = 16
+			}
+			srKHz := strconv.FormatFloat(sr/1000, 'f', -1, 64)
+			download.FileName += "-" + strconv.FormatInt(bd, 10) + "BIT-" + srKHz + "-KHZ-WEB-FLAC-" + download.Year + "-SQUIDWTF"
+		}
+	}
 	if download.Comment == "null" || download.Comment == "" {
 		download.Comment = ""
 	}
+	if download.numTracks == 0 && numTracks > 0 {
+		download.numTracks = numTracks
+	}
 
 	var itemsResult gjson.Result
-	if QobuzToken != "" {
+	if albumItems.Exists() {
+		itemsResult = albumItems
+	} else if tracksJSON != "" {
+		itemsResult = gjson.Parse(tracksJSON)
+	}
+	if !itemsResult.Exists() && QobuzToken != "" {
 		itemsResult = gjson.Get(bodyStr, "tracks.items")
 	}
 	if !itemsResult.Exists() {
@@ -325,18 +419,7 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		track.isrc = gjson.Get(valueString, "isrc").String()
 		track.completed = false
 
-		track.DownloadLink = getDownloadUrlOfficial(track.Id, quality)
-		if track.DownloadLink == "" {
-			var endpoint string = "/stream/" + strconv.Itoa(track.Id) + "?format_id=" + quality
-			resp, err := apiRequest(endpoint)
-			if err != nil {
-				fmt.Println("Proxy download failed for track " + track.Name + ":", err)
-			} else {
-				dlBodyBytes, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				track.DownloadLink = gjson.Get(string(dlBodyBytes), "url").String()
-			}
-		}
+		track.DownloadLink = qobuzGetTrackStreamUrl(track.Id, quality)
 		if track.DownloadLink == "" {
 			fmt.Println("Couldn't get a download link for track " + track.Name + " (" + strconv.Itoa(track.Id) + "), skipping...")
 			download.skippedTracks += 1
@@ -345,6 +428,11 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		}
 		return true
 	})
+
+	// Base completion on the tracks we actually discovered and got a link for, so a
+	// job can't stay "incomplete" forever (relevant when track/search must be used as
+	// a fallback because album/get only surfaces a subset of an album's tracks).
+	download.numTracks = len(download.Files)
 	Downloads[Id] = &download
 }
 
@@ -388,7 +476,7 @@ func queue(w http.ResponseWriter, r *http.Request) {
 		var download Download = *Downloads[id]
 		if download.downloaded == download.numTracks {
 			//shouldnt be in queue anymore, skipping
-			break
+			continue
 		}
 		//Don't know how long the download will take, so estimating 10 seconds per track remaining
 		timeleft := (download.numTracks - download.downloaded) * 10
@@ -469,7 +557,7 @@ func history(w http.ResponseWriter, r *http.Request) {
 		var download Download = *Downloads[id]
 		if download.downloaded < download.numTracks && download.downloaded != -1 {
 			//not finished yet, skipping...
-			break
+			continue
 		}
 		// Get the fileinfo
 		fileInfo, err := os.Stat(filepath.Join(DownloadPath, "complete", Category, download.FileName))
@@ -506,55 +594,67 @@ func history(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func getDownloadUrlOfficial(trackId int, quality string) string {
-	if QobuzToken == "" {
-		return ""
-	}
-	resp, err := qobuzRequest("GET", "track/get", map[string]string{"track_id": strconv.Itoa(trackId)})
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return ""
-	}
-	return gjson.Get(string(body), "sample").String()
-}
-
 func sanitizeFilename(name string) string {
 	// Forbidden characters on Windows: < > : " / \ | ? *
 	re := regexp.MustCompile(`[<>:"/\\|?*]`)
 	return re.ReplaceAllString(name, "_")
 }
 
-func grabFile(dest string, url string) (*grab.Response, error) {
-	req, err := grab.NewRequest(dest, url)
+// fixEncoding heals artist/album strings that arrive as Latin-1/Windows-1252 bytes
+// (single 0x80-0xFF bytes) instead of proper UTF-8. Some clients (curl in MSYS,
+// browser extensions on cp1252 systems) send accented characters as Latin-1, which
+// makes Qobuz reject the query with HTTP 400. Valid UTF-8 passes through untouched;
+// lone high bytes are reinterpreted as their U+00XX code point and re-encoded as UTF-8.
+func fixEncoding(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			sb.WriteRune(rune(s[i])) // Latin-1 byte -> code point
+			i++
+		} else {
+			sb.WriteRune(r)
+			i += size
+		}
+	}
+	return sb.String()
+}
+
+func grabFile(dest string, url string) error {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "*/*")
+
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	// Always send headers required by the new API
-	req.HTTPRequest.Header.Set("accept", "*/*")
-	req.HTTPRequest.Header.Set("accept-language", "fr-FR,fr;q=0.9,en-US;q=0.8,en-GB;q=0.7,en;q=0.6,it-IT;q=0.5,it;q=0.4,sv;q=0.3")
-	req.HTTPRequest.Header.Set("dnt", "1")
-	req.HTTPRequest.Header.Set("origin", "https://monochrome.tf")
-	req.HTTPRequest.Header.Set("priority", "u=1, i")
-	req.HTTPRequest.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
-	req.HTTPRequest.Header.Set("sec-ch-ua-mobile", "?0")
-	req.HTTPRequest.Header.Set("sec-ch-ua-platform", `"Windows"`)
-	req.HTTPRequest.Header.Set("sec-fetch-dest", "empty")
-	req.HTTPRequest.Header.Set("sec-fetch-mode", "cors")
-	req.HTTPRequest.Header.Set("sec-fetch-site", "cross-site")
-	req.HTTPRequest.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
 
-	resp := grab.DefaultClient.Do(req)
-	<-resp.Done
-	if err := resp.Err(); err != nil {
-		return resp, err
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		_ = os.Remove(dest)
+		return err
 	}
 
-	return resp, nil
+	return nil
 }
 
 func startDownload(Id string) {
@@ -573,7 +673,7 @@ func startDownload(Id string) {
 
 	//Download cover art
 	if download.CoverUrl != "" {
-		_, _ = grabFile(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
+		_ = grabFile(filepath.Join(Folder, "cover.jpg"), download.CoverUrl)
 	}
 
 	//Download each track
@@ -588,10 +688,16 @@ func startDownload(Id string) {
 			}
 		}
 
-		var Name string = sanitizeFilename(track.Index+" - "+download.Artist+" - "+track.Name) + FileExtension
-		_, err := grabFile(filepath.Join(trackFolder, Name), track.DownloadLink)
+		var ext string
+		if download.Quality == "5" {
+			ext = ".mp3"
+		} else {
+			ext = ".flac"
+		}
+		var Name string = sanitizeFilename(track.Index+" - "+download.Artist+" - "+track.Name) + ext
+		err := grabFile(filepath.Join(trackFolder, Name), track.DownloadLink)
 		if err != nil {
-			fmt.Println("Failed to download track " + track.Name + ":", err)
+			fmt.Println("Failed to download track "+track.Name+":", err)
 		} else {
 			track.completed = true
 			download.downloaded += 1
@@ -640,6 +746,6 @@ func writeMetaData(album Download, track File, fileName string) {
 
 	err := taglib.WriteTags(fileName, tags, 0)
 	if err != nil {
-		fmt.Println("Couldn't write Metadata to file " + fileName + ":", err)
+		fmt.Println("Couldn't write Metadata to file "+fileName+":", err)
 	}
 }

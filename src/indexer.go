@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -107,14 +108,14 @@ type NewznabResponse struct {
 }
 
 type Item struct {
-	Title       string      `xml:"title"`
-	Guid        Guid        `xml:"guid"`
-	Link        string      `xml:"link"`
-	Comments    string      `xml:"comments"`
-	PubDate     string      `xml:"pubDate"`
-	Category    string      `xml:"category"`
-	Description string      `xml:"description"`
-	Enclosure   Enclosure   `xml:"enclosure"`
+	Title       string        `xml:"title"`
+	Guid        Guid          `xml:"guid"`
+	Link        string        `xml:"link"`
+	Comments    string        `xml:"comments"`
+	PubDate     string        `xml:"pubDate"`
+	Category    string        `xml:"category"`
+	Description string        `xml:"description"`
+	Enclosure   Enclosure     `xml:"enclosure"`
 	Attrs       []NewznabAttr `xml:"newznab:attr"`
 }
 
@@ -135,9 +136,21 @@ type NewznabAttr struct {
 }
 
 func music(w http.ResponseWriter, u url.URL) {
-	if u.Query().Get("q") == "" {
+	artist := u.Query().Get("artist")
+	album := u.Query().Get("album")
+	q := u.Query().Get("q")
+
+	query := q
+	if query == "" {
+		query = artist
+		if album != "" {
+			query = artist + " " + album
+		}
+	}
+
+	if query == "" {
 		if Debug {
-			fmt.Println("searching with no query, responding garbage...")
+			fmt.Println("searching with no query, responding empty...")
 		}
 		rss := Rss{
 			Version: "2.0",
@@ -147,47 +160,17 @@ func music(w http.ResponseWriter, u url.URL) {
 				Description: "example.com API results",
 				NewznabResponse: NewznabResponse{
 					Offset: 0,
-					Total:  1234,
+					Total:  0,
 				},
-				Items: []Item{
-					{
-						Title: "A.Public.Domain.Album.Name",
-						Guid: Guid{
-							IsPermaLink: true,
-							Value:       "http://servername.com/rss/viewnzb/e9c515e02346086e3a477a5436d7bc8c",
-						},
-						Link:        "http://servername.com/rss/nzb/e9c515e02346086e3a477a5436d7bc8c&i=1&r=18cf9f0a736041465e3bd521d00a90b9",
-						Comments:    "http://servername.com/rss/viewnzb/e9c515e02346086e3a477a5436d7bc8c#comments",
-						PubDate:     "Sun, 06 Jun 2010 17:29:23 +0100",
-						Category:    "Music > MP3",
-						Description: "Some music",
-						Enclosure: Enclosure{
-							Url:    "http://servername.com/rss/nzb/e9c515e02346086e3a477a5436d7bc8c&i=1&r=18cf9f0a736041465e3bd521d00a90b9",
-							Length: 154653309,
-							Type:   "application/x-nzb",
-						},
-						Attrs: []NewznabAttr{
-							{Name: "category", Value: "3000"},
-							{Name: "category", Value: "3010"},
-							{Name: "size", Value: "144967295"},
-							{Name: "artist", Value: "Bob Smith"},
-							{Name: "album", Value: "Groovy Tunes"},
-							{Name: "publisher", Value: "Epic Music"},
-							{Name: "year", Value: "2011"},
-							{Name: "tracks", Value: "track one|track two|track three"},
-							{Name: "duration", Value: "3600"},
-							{Name: "coverurl", Value: "http://servername.com/covers/music/12345.jpg"},
-							{Name: "review", Value: "This album is great"},
-						},
-					},
-				},
+				Items: []Item{},
 			},
 		}
-
 		w.Write([]byte(xml.Header))
 		xml.NewEncoder(w).Encode(rss)
 		return
 	}
+
+	renderSearchResults(w, u, query)
 }
 
 func fetchAlbums(query string, limit int, offset int, qualityParam string) []Album {
@@ -202,11 +185,59 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 
 	albums := fetchAlbumsOfficial(query, limit)
 	if len(albums) == 0 {
+		// Retry with punctuation restored between single-letter tokens.
+		// Lidarr strips dots (e.g. "B.I.G." -> "B I G") which breaks Qobuz search.
+		if fixed := restorePunctuation(query); fixed != query {
+			if Debug {
+				fmt.Printf("Official search returned 0, retrying with '%s'\n", fixed)
+			}
+			albums = fetchAlbumsOfficial(fixed, limit)
+		}
+	}
+	if len(albums) == 0 {
 		albums = fetchAlbumsProxy(query, limit, offset, quality)
 	} else if Debug {
 		fmt.Printf("Official API search returned %d results\n", len(albums))
 	}
 	return albums
+}
+
+func restorePunctuation(query string) string {
+	words := strings.Split(query, " ")
+	single := make([]bool, len(words))
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		if isSingleLetter(w) {
+			single[i] = true
+		}
+	}
+	// join runs of single letters with dots: "B I G" -> "B.I.G"
+	// but keep normal spaces between a word and a single letter: "Jay Z" stays "Jay Z"
+	var sb strings.Builder
+	for i, w := range words {
+		// separate words unless they're consecutive single letters (already joined with ".")
+		if i > 0 && !(single[i-1] && single[i]) {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(w)
+		if single[i] {
+			// dot after, unless end of a run at end of string
+			if i+1 < len(words) && single[i+1] {
+				sb.WriteString(".")
+			}
+		}
+	}
+	return sb.String()
+}
+
+func isSingleLetter(w string) bool {
+	if len(w) != 1 {
+		return false
+	}
+	c := w[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 func fetchAlbumsOfficial(query string, limit int) []Album {
@@ -241,7 +272,10 @@ func fetchAlbumsOfficial(query string, limit int) []Album {
 		}
 		a.SamplingRate = int64(sr)
 		a.BitDepth = value.Get("maximum_bit_depth").Int()
-		a.Id = value.Get("id").String()
+		a.Id = value.Get("qobuz_id").String()
+		if a.Id == "" {
+			a.Id = value.Get("id").String()
+		}
 		a.NumTracks = value.Get("tracks_count").Int()
 		a.Channels = value.Get("maximum_channel_count").Int()
 		a.Duration = value.Get("duration").Int()
@@ -366,13 +400,15 @@ func fetchAlbumsProxy(query string, limit int, offset int, quality string) []Alb
 }
 
 func search(w http.ResponseWriter, u url.URL) {
-	//doing the actual querying request
-	//getting the query parameters
+	query := u.Query().Get("q")
+	renderSearchResults(w, u, query)
+}
+
+func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 	limit, err := strconv.Atoi(u.Query().Get("limit"))
 	if err != nil {
 		limit = 10
 	}
-	query := u.Query().Get("q")
 	offset, err := strconv.Atoi(u.Query().Get("offset"))
 	if err != nil {
 		offset = 0
@@ -391,6 +427,12 @@ func search(w http.ResponseWriter, u url.URL) {
 
 	if Debug {
 		fmt.Println("Total results returned from search:", len(Albums), "Quality:", quality)
+	}
+
+	if quality == "5" {
+		for i := range Albums {
+			Albums[i].Size = int64(320 * 1000 * Albums[i].Duration / 8)
+		}
 	}
 
 	items := []Item{}
@@ -448,8 +490,8 @@ func search(w http.ResponseWriter, u url.URL) {
 			Category:    categoryName,
 			Description: album.Artist + " " + album.Title,
 			Enclosure: Enclosure{
-				Url:    "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + quality,
-				Type:   "application/x-nzb",
+				Url:  "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + quality + "&artist=" + url.QueryEscape(album.Artist) + "&album=" + url.QueryEscape(album.Title),
+				Type: "application/x-nzb",
 			},
 			Attrs: append(categoryAttrs, NewznabAttr{Name: "genre", Value: album.Genre}),
 		})
@@ -489,12 +531,16 @@ func fakenzb(w http.ResponseWriter, u url.URL) {
 	QobuzId := u.Query().Get("qobuzid")
 	NumTracks := u.Query().Get("numtracks")
 	Quality := u.Query().Get("quality")
+	Artist := u.Query().Get("artist")
+	Album := u.Query().Get("album")
 	w.Header().Set("Content-Type", "application/x-nzb")
 	response := "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n" +
 		"<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.0//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.0.dtd\">\n" +
 		"<!-- " + QobuzId + "  -->\n" +
 		"<!-- " + NumTracks + " -->\n" +
 		"<!-- " + Quality + " -->\n" +
+		"<!-- " + Artist + " -->\n" +
+		"<!-- " + Album + " -->\n" +
 		"<nzb>\n" +
 		"    <file post_id=\"1\">\n" +
 		"        <groups>\n" +
