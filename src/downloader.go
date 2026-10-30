@@ -516,8 +516,9 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 	// Rebuild folder name to match the release name format served by the indexer.
 	if download.Artist != "" && download.Album != "" {
 		download.FileName = sanitizeFilename(download.Artist + "-" + download.Album)
+		provider := releaseProviderTag(download.Source)
 		if download.Quality == "5" {
-			download.FileName += "-WEB-320-MP3-" + download.Year + "-SQUIDWTF"
+			download.FileName += "-WEB-320-MP3-" + download.Year + "-" + provider
 		} else {
 			sr := gjson.Get(bodyStr, "maximum_sampling_rate").Float()
 			if sr == 0 {
@@ -537,7 +538,7 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 				bd = 16
 			}
 			srKHz := strconv.FormatFloat(sr/1000, 'f', -1, 64)
-			download.FileName += "-" + strconv.FormatInt(bd, 10) + "BIT-" + srKHz + "-KHZ-WEB-FLAC-" + download.Year + "-SQUIDWTF"
+			download.FileName += "-" + strconv.FormatInt(bd, 10) + "BIT-" + srKHz + "-KHZ-WEB-FLAC-" + download.Year + "-" + provider
 		}
 	}
 

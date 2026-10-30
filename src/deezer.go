@@ -233,7 +233,8 @@ func generateDeezerDownload(filename, id, _ string) {
 		return
 	}
 	d.numTracks = len(d.Files)
-	d.FileName = sanitizeFilename(d.Artist + "-" + d.Album + "-16BIT-44.1-KHZ-WEB-FLAC-" + d.Year + "-SQUIDWTF")
+	d.Source = "deezer"
+	d.FileName = sanitizeFilename(d.Artist + "-" + d.Album + "-16BIT-44.1-KHZ-WEB-FLAC-" + d.Year + "-DEEZER")
 	d.downloaded = 0
 }
 

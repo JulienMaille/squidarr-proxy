@@ -67,7 +67,7 @@ func main() {
 		fmt.Println(err)
 	}
 	for _, folder := range folders {
-		if strings.Contains(folder.Name(), "-SQUIDWTF") {
+		if isSquidarrReleaseFolder(folder.Name()) {
 			fmt.Println("Removing incomplete download " + folder.Name())
 			err := os.RemoveAll(filepath.Join(DownloadPath, "incomplete", Category, folder.Name()))
 			if err != nil {
@@ -81,7 +81,7 @@ func main() {
 	// Adding these to the downloads list allows importing/deleting from Lidarr
 	folders, _ = os.ReadDir(filepath.Join(DownloadPath, "complete", Category))
 	for _, folder := range folders {
-		if strings.Contains(folder.Name(), "-SQUIDWTF") {
+		if isSquidarrReleaseFolder(folder.Name()) {
 			fmt.Println("Adding completed download " + folder.Name() + " to history")
 			var download Download
 			download.FileName = folder.Name()
@@ -104,6 +104,10 @@ func main() {
 	http.HandleFunc("/api/", corsHandler(handleSimpleDownload)) // also serve at /api/ for doc purposes
 	fmt.Println("Listening on port " + Port + "...")
 	http.ListenAndServe(":"+Port, nil)
+}
+
+func isSquidarrReleaseFolder(name string) bool {
+	return strings.Contains(name, "-SQUIDWTF") || strings.Contains(name, "-QOBUZ") || strings.Contains(name, "-DEEZER")
 }
 
 func corsHandler(h http.HandlerFunc) http.HandlerFunc {

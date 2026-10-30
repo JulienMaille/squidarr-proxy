@@ -499,14 +499,22 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 
 func releaseName(album Album, quality string) (name string) {
 	release := time.Unix(album.ReleaseDate, 0)
+	provider := releaseProviderTag(album.Source)
 	if quality == "5" {
-		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-" + provider
 	} else {
 		samplingRateKHz := float64(album.SamplingRate) / 1000.0
 		samplingRateStr := strconv.FormatFloat(samplingRateKHz, 'f', -1, 64)
-		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + samplingRateStr + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-SQUIDWTF"
+		name = album.Artist + "-" + album.Title + "-" + strconv.FormatInt(album.BitDepth, 10) + "BIT-" + samplingRateStr + "-KHZ-WEB-FLAC-" + strconv.Itoa(release.Year()) + "-" + provider
 	}
 	return name
+}
+
+func releaseProviderTag(source string) string {
+	if strings.EqualFold(source, "deezer") {
+		return "DEEZER"
+	}
+	return "QOBUZ"
 }
 
 func fakenzb(w http.ResponseWriter, u url.URL) {

@@ -219,7 +219,7 @@ func TestDeezerLiveIndexer(t *testing.T) {
 	w := httptest.NewRecorder()
 	u := url.URL{RawQuery: url.Values{"q": {"Daft Punk Discovery"}, "limit": {"2"}}.Encode()}
 	renderSearchResults(w, u, "Daft Punk Discovery")
-	if !bytes.Contains(w.Body.Bytes(), []byte("Daft Punk-Discovery-16BIT-44.1-KHZ-WEB-FLAC-2001")) {
+	if !bytes.Contains(w.Body.Bytes(), []byte("Daft Punk-Discovery-16BIT-44.1-KHZ-WEB-FLAC-2001-DEEZER")) {
 		t.Fatalf("missing valid Discovery release: %s", w.Body.String())
 	}
 }
@@ -239,7 +239,7 @@ func TestDeezerFLACIndexerLabel(t *testing.T) {
 	w := httptest.NewRecorder()
 	u := url.URL{RawQuery: url.Values{"q": {"Artist Album"}}.Encode()}
 	renderSearchResults(w, u, "Artist Album")
-	if !bytes.Contains(w.Body.Bytes(), []byte("Artist-Album-16BIT-44.1-KHZ-WEB-FLAC-2001")) {
+	if !bytes.Contains(w.Body.Bytes(), []byte("Artist-Album-16BIT-44.1-KHZ-WEB-FLAC-2001-DEEZER")) {
 		t.Fatalf("missing FLAC label: %s", w.Body.String())
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte(`name="size" value="0"`)) || !bytes.Contains(w.Body.Bytes(), []byte(`name="size" value="`)) {

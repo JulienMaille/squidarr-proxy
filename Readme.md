@@ -1,6 +1,6 @@
 # squidarr-proxy
 
-Complete your Lidarr library by downloading from Qobuz via squid.wtf
+Complete your Lidarr library with Qobuz and Deezer search and downloads.
 
 ## Setup
 
@@ -9,10 +9,10 @@ Use the included [docker-compose](docker-compose.yml) as reference for creating 
 
 ### Configuration
 
-Searches return Qobuz and Deezer results together; each result identifies its source and downloads through that provider. Set `DEEZER_API_KEY` in `config.env` to enable Deezer downloads (the community key is not bundled). Deezer downloads use validated FLAC directly and require no external transcoder. `QUALITY=mp3-320` selects MP3 for Qobuz results; Deezer remains FLAC.
+Searches return Qobuz and Deezer results together; each result identifies its source and downloads through that provider. Set an authorized `DEEZER_API_KEY` in `config.env` to enable Deezer downloads. Deezer downloads use FLAC directly; `QUALITY=mp3-320` selects MP3 for Qobuz results.
 
 ### Sharing with a friend
-Send your friend the GitHub **Code → Download ZIP** archive and email them their own `config.env` based on `config.env.example`. Do not upload `config.env` or paste its secrets into GitHub. Include the server address, a unique `API_KEY`, and any required backend credentials. Treat the emailed file and API key as a password: anyone who obtains them can use your server. Prefer giving your friend a separate instance/key with restricted access rather than sharing credentials for a server containing private data. They should extract the ZIP, put `config.env` beside `start_squidarr.bat` (Windows) or follow the Docker setup, then start the app. The client can be opened from the extracted `client/index.html` file and configured with the server URL and API key.
+For Windows, send the ZIP attached to a GitHub Release (not **Code → Download ZIP**). Your friend should copy `config.env.example` to `config.env`, set a private `API_KEY` and `DOWNLOAD_PATH`, then run `start_squidarr.bat`. Do not upload `config.env` or paste its secrets into GitHub. Treat credentials as passwords; preferably give your friend a separate instance/key rather than access to a server containing private data. The client is `client/index.html`.
 
 To create a downloadable Windows release, push a version tag such as `v1.2.3`. GitHub Actions tests and builds the optimized executable, then attaches a minimal ZIP to the GitHub Release. The ZIP contains only the executable, launcher, client, config template, quick-start instructions, and license; it never includes `config.env`.
 
@@ -28,13 +28,9 @@ The following environment variables can be used to configure squidarr-proxy. You
 | `DEBUG` | Enable debug logging (`true`/`false`). | `false` |
 | `QOBUZ_TOKEN` | Optional Qobuz `user_auth_token` for direct official-API access. Tokens rotate and may be limited to 30-second previews. | (none) |
 | `QOBUZ_NAV_LINK` | Qobuz search, album metadata, and full-length streaming backend. | `https://qobuz.itzsantiax.qzz.io` (configure in `config.env`) |
-| `APP_ID` / `APP_SECRET` | Qobuz app credential pair used to sign official-API requests. Override when the default pair is IP-banned/revoked. | `798273057` / `abb21364…` |
+| `APP_ID` / `APP_SECRET` | Optional Qobuz app credentials used to sign official-API requests. | Built-in defaults |
 
-**Finding fresh credentials** (tokens rotate often):
-1. `QOBUZ_USER_TOKEN` / `QOBUZ_APP_ID` / `QOBUZ_SECRET` are published in [monochrome `index.js`](https://github.com/jacobyz211/monochrome/blob/main/index.js) — take the newest values from the commit history.
-2. Live pool of currently-valid tokens: `GET https://citegptapi.f5.si/webhook/qbdlx/shared` (send header `Origin: https://qbdlx.launchpd.cloud`).
-3. Verify a token before use: `GET https://www.qobuz.com/api.json/0.2/catalog/search?app_id=312369995&user_auth_token=<token>&query=test&limit=1` → HTTP 200 = live.
-Full procedure and caveats (free accounts get 30-second previews only): [PROXY_API.md](PROXY_API.md).
+Use only credentials issued for your own account or application, and follow the provider's terms. Do not use shared token pools or credentials copied from third-party projects.
 
 The retired `API_LINK` and premium Eclipse stream fallback have been removed after endpoint checks returned HTTP 503 and 404 respectively. Qobuz uses Navidrums, then the optional official API credentials.
 

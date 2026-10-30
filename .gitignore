@@ -6,3 +6,7 @@
 config.env
 dl_*.tsv
 run_batch.sh
+
+# Local agent/research notes; not part of the public project documentation
+GEMINI.md
+PROXY_API.md
