@@ -35,19 +35,23 @@ Instead of entering details every time, you can create a file named `config.env`
 
 ```env
 API_KEY=your_secret_password
+DEEZER_API_KEY=your_deezer_key
 DOWNLOAD_PATH=C:\Downloads\squidarr
 PORT=8687
 CATEGORY=music
-# Set QUALITY to 'flac' (default) or 'mp3-320'
+# Optional Qobuz quality: 'flac' (default) or 'mp3-320'; Deezer stays FLAC.
 QUALITY=flac
 TZ=Europe/Berlin
 
-# The API endpoint for metadata and download links.
-# Default: https://qobuz.squid.wtf/api
-# Alternatives:
-# API_LINK=https://qobuz.kennyy.com.br/api
-API_LINK=https://qobuz.squid.wtf/api
+# Full-length Qobuz search, metadata, and stream backend.
+QOBUZ_NAV_LINK=https://qobuz.itzsantiax.qzz.io
+# Optional Qobuz account token; leave blank to use the configured backends.
+QOBUZ_TOKEN=
+# Optional full-length Qobuz backend.
+QOBUZ_NAV_LINK=https://qobuz.itzsantiax.qzz.io
 ```
+
+Keep `config.env` private. It is ignored by Git and should be shared directly with a trusted recipient, never committed or included in a public ZIP.
 
 ## Step 4: Configure Lidarr
 

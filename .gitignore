@@ -1,6 +1,8 @@
 # Build artifacts
 *.exe
+*.exe~
 # Runtime / temp
 *.log
+config.env
 dl_*.tsv
 run_batch.sh

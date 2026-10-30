@@ -8,8 +8,8 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @connect      localhost
-// @updateURL    https://raw.githubusercontent.com/JulienMaille/qobuz-dl/main/qobuz-downloader.user.js
-// @downloadURL  https://raw.githubusercontent.com/JulienMaille/qobuz-dl/main/qobuz-downloader.user.js
+// @updateURL    https://raw.githubusercontent.com/JulienMaille/squidarr-proxy/main/qobuz-downloader.user.js
+// @downloadURL  https://raw.githubusercontent.com/JulienMaille/squidarr-proxy/main/qobuz-downloader.user.js
 // ==/UserScript==
 
 (function() {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,17 @@ import (
 
 var searchAppId = "798273057"
 var searchAppSecret = "abb21364945c0583309667d13ca3d93a"
+
+func init() {
+	// Credential rotation: the web-player bundle IDs get flagged/banned over
+	// time; allow overriding both without a rebuild (see config.env).
+	if v := os.Getenv("APP_ID"); v != "" {
+		searchAppId = v
+	}
+	if v := os.Getenv("APP_SECRET"); v != "" {
+		searchAppSecret = v
+	}
+}
 
 func qobuzRequest(method string, endpoint string, params map[string]string) (*http.Response, error) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)

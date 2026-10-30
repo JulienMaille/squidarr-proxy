@@ -3,16 +3,11 @@ services:
     image: ghcr.io/mgthepro/squidarr-proxy:main
     container_name: squidarr-proxy
     environment:
-      - TZ=Europe/Berlin
+      - TZ=Europe/Paris
       - DOWNLOAD_PATH=/data/squidarr
-      - CATEGORY=music
-      - PORT=8687
-      # The API endpoint for metadata and download links.
-      # Default: https://trypt-hifi-dl-456461932686.us-west1.run.app/api
-      # Alternatives:
-      # - https://qobuz.kennyy.com.br/api
-      # - https://qobuz.squid.wtf/api
-      - API_LINK=https://qobuz.squid.wtf/api
+      # Full-length Qobuz backend (Navidrums routes). Its premium pool serves
+      # complete FLAC files instead of 30s previews. Optional but recommended.
+      - QOBUZ_NAV_LINK=https://qobuz.itzsantiax.qzz.io
       # The API Key is the password to your instance, set when configuring indexer and downloader in Lidarr
       # Set any value you wish here, but do not leave it empty
       - API_KEY=

@@ -14,6 +14,7 @@ import (
 )
 
 type Album struct {
+	Source       string
 	Artist       string
 	Title        string
 	Edition      string
@@ -174,12 +175,59 @@ func music(w http.ResponseWriter, u url.URL) {
 }
 
 func fetchAlbums(query string, limit int, offset int, qualityParam string) []Album {
+	// Backward compatibility for callers/tests that explicitly select one source.
+	if Provider == "deezer" {
+		return deezerSearchAlbums(query, limit, offset)
+	}
+	if Provider == "qobuz" {
+		return fetchQobuzAlbums(query, limit, offset, qualityParam)
+	}
+	// Fetch from both catalogs before applying the combined pagination window.
+	qobuz := fetchQobuzAlbums(query, limit+offset, 0, qualityParam)
+	deezer := deezerSearchAlbums(query, limit+offset, 0)
+	for i := range qobuz {
+		qobuz[i].Source = "qobuz"
+	}
+	for i := range deezer {
+		deezer[i].Source = "deezer"
+	}
+	combined := mergeProviderAlbums(qobuz, deezer)
+	fmt.Printf("Combined search %q: Qobuz=%d Deezer=%d\n", query, len(qobuz), len(deezer))
+	if offset >= len(combined) {
+		return nil
+	}
+	combined = combined[offset:]
+	if len(combined) > limit {
+		combined = combined[:limit]
+	}
+	return combined
+}
+
+// mergeProviderAlbums interleaves providers so one source cannot crowd out the
+// other when the caller requests a short page (typically the first 10 results).
+func mergeProviderAlbums(qobuz, deezer []Album) []Album {
+	combined := make([]Album, 0, len(qobuz)+len(deezer))
+	for i := 0; i < len(qobuz) || i < len(deezer); i++ {
+		if i < len(qobuz) {
+			combined = append(combined, qobuz[i])
+		}
+		if i < len(deezer) {
+			combined = append(combined, deezer[i])
+		}
+	}
+	return combined
+}
+
+func fetchQobuzAlbums(query string, limit int, offset int, qualityParam string) []Album {
 	quality := qualityParam
 	if quality == "" || quality == "default" {
 		quality = QualityId
 	} else if quality == "mp3-320" {
 		quality = "5"
 	} else if quality == "flac" {
+		quality = "7"
+	}
+	if Provider == "deezer" && quality != "5" {
 		quality = "7"
 	}
 
@@ -195,9 +243,29 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 		}
 	}
 	if len(albums) == 0 {
-		albums = fetchAlbumsProxy(query, limit, offset, quality)
-	} else if Debug {
-		fmt.Printf("Official API search returned %d results\n", len(albums))
+		albums = fetchAlbumsNav(query, limit)
+	}
+	if len(albums) > 0 && Debug {
+		fmt.Printf("Search returned %d results (id quality: %s)\n", len(albums), albums[0].Id)
+	}
+	return albums
+}
+
+// fetchAlbumsNav queries the Navidrums-style backend, which serves full-length
+// audio and therefore also makes a reliable metadata source when the official
+// API is token-limited.
+func fetchAlbumsNav(query string, limit int) []Album {
+	if NavLink == "" {
+		return nil
+	}
+	albums := navSearchAlbums(query, limit)
+	if len(albums) == 0 {
+		if fixed := restorePunctuation(query); fixed != query {
+			albums = navSearchAlbums(fixed, limit)
+		}
+	}
+	if Debug {
+		fmt.Printf("Navidrums search returned %d results\n", len(albums))
 	}
 	return albums
 }
@@ -260,6 +328,7 @@ func fetchAlbumsOfficial(query string, limit int) []Album {
 	result := gjson.Get(bodyStr, "albums.items")
 	result.ForEach(func(key, value gjson.Result) bool {
 		var a Album
+		a.Source = "qobuz"
 		a.Artist = value.Get("artist.name").String()
 		a.Title = value.Get("title").String()
 		a.Edition = value.Get("version").String()
@@ -312,93 +381,6 @@ func fetchAlbumsOfficial(query string, limit int) []Album {
 	return albums
 }
 
-func fetchAlbumsProxy(query string, limit int, offset int, quality string) []Album {
-	var Albums []Album
-
-	escapedQuery := url.QueryEscape(query)
-
-	batchSize := 50
-	for i := 0; i < limit; i += batchSize {
-		var endpoint string = "/search?q=" + escapedQuery + "&offset=" + (strconv.Itoa(offset + i)) + "&limit=" + strconv.Itoa(batchSize)
-		resp, err := apiRequest(endpoint)
-		if err != nil {
-			fmt.Println(err)
-			return Albums
-		}
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Println(err)
-			return Albums
-		}
-		bodyStr := string(bodyBytes)
-		total := int(gjson.Get(bodyStr, "albums.total").Int())
-		if total == 0 {
-			total = int(gjson.Get(bodyStr, "total").Int())
-		}
-		if total == 0 {
-			total = len(gjson.Get(bodyStr, "albums.items").Array())
-		}
-		if total < limit && total > 0 {
-			limit = total
-		}
-		result := gjson.Get(bodyStr, "albums.items")
-		if !result.Exists() {
-			result = gjson.Get(bodyStr, "items")
-		}
-		result.ForEach(func(key, value gjson.Result) bool {
-			var album Album
-			// DuckDNS API returns items directly (no type/content wrapper)
-			var content gjson.Result = value
-			if !content.IsObject() {
-				return true
-			}
-
-			album.Artist = content.Get("artist.name").String()
-			album.Title = content.Get("title").String()
-			album.Edition = content.Get("version").String()
-			album.ReleaseDate = content.Get("released_at").Int()
-			album.Publisher = content.Get("label.name").String()
-			album.CoverUrl = content.Get("image.small").String()
-
-			samplingRate := content.Get("maximum_sampling_rate").Float()
-			if samplingRate < 1000 && samplingRate > 0 {
-				samplingRate *= 1000
-			}
-			album.SamplingRate = int64(samplingRate)
-
-			album.BitDepth = content.Get("maximum_bit_depth").Int()
-			album.Id = content.Get("id").String()
-			album.NumTracks = content.Get("tracks_count").Int()
-			album.Channels = content.Get("maximum_channel_count").Int()
-			album.Duration = content.Get("duration").Int()
-
-			album.Genre = content.Get("genre.name").String()
-			album.QobuzUrl = content.Get("url").String()
-
-			if quality == "5" {
-				album.Size = int64(320 * 1000 * album.Duration / 8)
-			} else {
-				sr := album.SamplingRate
-				if sr == 0 {
-					sr = 44100
-				}
-				bd := album.BitDepth
-				if bd == 0 {
-					bd = 16
-				}
-				ch := album.Channels
-				if ch == 0 {
-					ch = 2
-				}
-				album.Size = int64(float64((sr*bd*ch*album.Duration)/8) * 0.7)
-			}
-			Albums = append(Albums, album)
-			return true
-		})
-	}
-	return Albums
-}
-
 func search(w http.ResponseWriter, u url.URL) {
 	query := u.Query().Get("q")
 	renderSearchResults(w, u, query)
@@ -422,21 +404,21 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 	} else if quality == "flac" {
 		quality = "7"
 	}
-
 	Albums := fetchAlbums(query, limit, offset, quality)
 
 	if Debug {
 		fmt.Println("Total results returned from search:", len(Albums), "Quality:", quality)
 	}
 
-	if quality == "5" {
-		for i := range Albums {
-			Albums[i].Size = int64(320 * 1000 * Albums[i].Duration / 8)
-		}
-	}
-
 	items := []Item{}
 	for _, album := range Albums {
+		resultQuality := quality
+		if album.Source == "deezer" {
+			resultQuality = "7" // Deezer downloads remain FLAC without transcoding.
+		}
+		if resultQuality == "5" {
+			album.Size = int64(320 * 1000 * album.Duration / 8)
+		}
 		// Removed regex sanitization of album.Title and album.Artist
 
 		var categoryName string
@@ -444,7 +426,7 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 		release := time.Unix(album.ReleaseDate, 0)
 		yearStr := strconv.Itoa(release.Year())
 
-		if quality == "5" {
+		if resultQuality == "5" {
 			// MP3 320
 			categoryName = "Audio > MP3"
 			categoryAttrs = []NewznabAttr{
@@ -479,7 +461,7 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 		}
 
 		items = append(items, Item{
-			Title: releaseName(album, quality),
+			Title: releaseName(album, resultQuality),
 			Guid: Guid{
 				IsPermaLink: true,
 				Value:       album.QobuzUrl,
@@ -490,10 +472,10 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 			Category:    categoryName,
 			Description: album.Artist + " " + album.Title,
 			Enclosure: Enclosure{
-				Url:  "/indexer?t=fakenzb&qobuzid=" + album.Id + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + quality + "&artist=" + url.QueryEscape(album.Artist) + "&album=" + url.QueryEscape(album.Title),
+				Url:  "/indexer?t=fakenzb&qobuzid=" + url.QueryEscape(album.Id) + "&numtracks=" + strconv.FormatInt(album.NumTracks, 10) + "&apikey=" + ApiKey + "&quality=" + resultQuality + "&source=" + album.Source + "&artist=" + url.QueryEscape(album.Artist) + "&album=" + url.QueryEscape(album.Title),
 				Type: "application/x-nzb",
 			},
-			Attrs: append(categoryAttrs, NewznabAttr{Name: "genre", Value: album.Genre}),
+			Attrs: append(categoryAttrs, NewznabAttr{Name: "genre", Value: album.Genre}, NewznabAttr{Name: "source", Value: album.Source}),
 		})
 	}
 
@@ -533,6 +515,7 @@ func fakenzb(w http.ResponseWriter, u url.URL) {
 	Quality := u.Query().Get("quality")
 	Artist := u.Query().Get("artist")
 	Album := u.Query().Get("album")
+	Source := u.Query().Get("source")
 	w.Header().Set("Content-Type", "application/x-nzb")
 	response := "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n" +
 		"<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.0//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.0.dtd\">\n" +
@@ -541,6 +524,7 @@ func fakenzb(w http.ResponseWriter, u url.URL) {
 		"<!-- " + Quality + " -->\n" +
 		"<!-- " + Artist + " -->\n" +
 		"<!-- " + Album + " -->\n" +
+		"<!-- " + Source + " -->\n" +
 		"<nzb>\n" +
 		"    <file post_id=\"1\">\n" +
 		"        <groups>\n" +

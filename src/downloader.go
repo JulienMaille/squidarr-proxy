@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -51,12 +54,14 @@ type File struct {
 	Index        string
 	mediaNumber  string
 	isrc         string
+	duration     int64
 	DownloadLink string
 	completed    bool
 }
 
 type Download struct {
 	Id            string
+	Source        string
 	Artist        string
 	Album         string
 	Comment       string
@@ -69,6 +74,7 @@ type Download struct {
 	label         string
 	downloaded    int
 	skippedTracks int
+	previewTracks int
 	FileName      string
 	Quality       string
 	Files         []File
@@ -140,7 +146,7 @@ func handleSimpleDownload(w http.ResponseWriter, r *http.Request) {
 		version := ""
 		numTracks := 0
 
-		if artist != "" && album != "" {
+		if r.URL.Query().Get("source") != "deezer" && artist != "" && album != "" {
 			albumJSON, err := qobuzSearchAlbum(id, artist, album)
 			if err == nil {
 				artist = gjson.Get(albumJSON, "artist.name").String()
@@ -160,7 +166,7 @@ func handleSimpleDownload(w http.ResponseWriter, r *http.Request) {
 			filename = id
 		}
 
-		generateDownload(filename, id, numTracks, quality, artist, album)
+		generateDownloadForSource(filename, id, numTracks, quality, artist, album, r.URL.Query().Get("source"))
 		if Downloads[id] != nil && Downloads[id].downloaded != -1 {
 			startDownload(id)
 		}
@@ -223,37 +229,37 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	}
 	filename = sanitizeFilename(filename)
 
-	// Extract metadata from NZB XML comments (<!-- ... -->), in the order
-	// written by fakenzb: QobuzId, NumTracks, Quality, Artist, Album.
-	// Search the whole body (line indexes are fragile when the NZB layout changes).
+	// Extract metadata from NZB XML comments, which fakenzb writes in a FIXED
+	// order: QobuzId, NumTracks, Quality, Artist, Album.
+	// QobuzId may be the ALPHANUMERIC catalog id (e.g. myy231ew9yh9b), so
+	// comments must be read by POSITION — the old "numeric first" heuristic
+	// misparsed every alphanumeric id (id became "artist", track count became
+	// "id"), producing empty downloads with garbage folder names.
 	reComment := regexp.MustCompile(`<!--\s+([^<]+?)\s+-->`)
 	var Id string
 	var NumTracks int
 	var quality string
 	var artist string
 	var album string
-	for _, line := range strings.Split(bodyStr, "\n") {
-		m := reComment.FindStringSubmatch(line)
-		if m == nil {
-			continue
+	var source string
+	for i, m := range reComment.FindAllStringSubmatch(bodyStr, -1) {
+		if i > 5 {
+			break
 		}
 		val := strings.TrimSpace(m[1])
-		// Numeric comments in order: id, track count, quality
-		if num, err := strconv.Atoi(val); err == nil {
-			if Id == "" {
-				Id = val
-			} else if NumTracks == 0 {
-				NumTracks = num
-			} else if quality == "" {
-				quality = val
-			}
-			continue
-		}
-		// Non-numeric comments in order: artist, album
-		if artist == "" {
+		switch i {
+		case 0:
+			Id = val
+		case 1:
+			NumTracks, _ = strconv.Atoi(val)
+		case 2:
+			quality = val
+		case 3:
 			artist = val
-		} else if album == "" {
+		case 4:
 			album = val
+		case 5:
+			source = val
 		}
 	}
 
@@ -263,24 +269,39 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println("Adding download:", filename, "ID:", Id, "Tracks:", NumTracks, "Quality:", quality, "Artist:", artist, "Album:", album)
-	generateDownload(filename, Id, NumTracks, quality, artist, album)
+	// generateDownload resolves metadata and one stream URL per track — slow
+	// when the proxy fallback is used (an HTTP round trip per track). Run it in
+	// the background so the client's "Download started" ack arrives immediately;
+	// the actual file transfer happens in startDownload regardless.
+	go func() {
+		generateDownloadForSource(filename, Id, NumTracks, quality, artist, album, source)
+		if Downloads[Id] != nil && Downloads[Id].downloaded != -1 {
+			startDownload(Id)
+		}
+	}()
 
 	//send response using QobuzId as nzo_id
 	w.Write([]byte("{\n" +
 		"\"status\": true,\n" +
 		"\"nzo_ids\": [\"SABnzbd_nzo_" + Id + "\"]\n" +
 		"}"))
-	if Downloads[Id] != nil && Downloads[Id].downloaded != -1 {
-		go startDownload(Id)
-	}
 }
 
 func generateDownload(filename string, Id string, numTracks int, qualityParam string, artistHint string, albumHint string) {
+	generateDownloadForSource(filename, Id, numTracks, qualityParam, artistHint, albumHint, Provider)
+}
+
+func generateDownloadForSource(filename string, Id string, numTracks int, qualityParam string, artistHint string, albumHint string, source string) {
+	if source == "deezer" {
+		generateDeezerDownload(filename, Id, qualityParam)
+		return
+	}
 	// Heal accents that may have arrived as Latin-1 instead of UTF-8.
 	artistHint = fixEncoding(artistHint)
 	albumHint = fixEncoding(albumHint)
 	var download Download
 	download.Id = Id
+	download.Source = source
 	download.numTracks = numTracks
 	download.FileName = filename
 	download.downloaded = 0
@@ -332,6 +353,22 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 		}
 	}
 
+	// Navidrums fallback: unlike the official API its account streams full-length
+	// audio, so it is both a metadata source and the primary stream backend.
+	// /api/get-album only accepts the ALPHANUMERIC catalog id, so resolve the
+	// numeric qobuz_id Lidarr passes back through a search first.
+	if !albumItems.Exists() && tracksJSON == "" && NavLink != "" {
+		if albumJSON, nerr := navGetAlbumByHints(Id, artistHint, albumHint); nerr == nil {
+			bodyStr = albumJSON
+			albumItems = gjson.Get(bodyStr, "data.tracks.items")
+			if Debug {
+				fmt.Println("Navidrums album/get found", len(albumItems.Array()), "tracks for album", Id)
+			}
+		} else if Debug {
+			fmt.Println("Navidrums album/get failed:", nerr)
+		}
+	}
+
 	if artistHint != "" {
 		download.Artist = artistHint
 	} else {
@@ -369,27 +406,6 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 	if len(releaseDate) >= 4 {
 		download.Year = releaseDate[:4]
 	}
-	//Rebuild folder name to match the release name format served by the indexer
-	if download.Artist != "" && download.Album != "" {
-		download.FileName = sanitizeFilename(download.Artist + "-" + download.Album)
-		if download.Quality == "5" {
-			download.FileName += "-WEB-320-MP3-" + download.Year + "-SQUIDWTF"
-		} else {
-			sr := gjson.Get(bodyStr, "maximum_sampling_rate").Float()
-			if sr < 1000 && sr > 0 {
-				sr *= 1000
-			}
-			if sr == 0 {
-				sr = 44100
-			}
-			bd := gjson.Get(bodyStr, "maximum_bit_depth").Int()
-			if bd == 0 {
-				bd = 16
-			}
-			srKHz := strconv.FormatFloat(sr/1000, 'f', -1, 64)
-			download.FileName += "-" + strconv.FormatInt(bd, 10) + "BIT-" + srKHz + "-KHZ-WEB-FLAC-" + download.Year + "-SQUIDWTF"
-		}
-	}
 	if download.Comment == "null" || download.Comment == "" {
 		download.Comment = ""
 	}
@@ -409,25 +425,121 @@ func generateDownload(filename string, Id string, numTracks int, qualityParam st
 	if !itemsResult.Exists() {
 		itemsResult = gjson.Get(bodyStr, "data.tracks.items")
 	}
-	itemsResult.ForEach(func(key, value gjson.Result) bool {
-		var track File
-		var valueString = value.String()
-		track.Id = int(gjson.Get(valueString, "id").Int())
-		track.Name = gjson.Get(valueString, "title").String()
-		track.Index = gjson.Get(valueString, "track_number").String()
-		track.mediaNumber = gjson.Get(valueString, "media_number").String()
-		track.isrc = gjson.Get(valueString, "isrc").String()
-		track.completed = false
 
-		track.DownloadLink = qobuzGetTrackStreamUrl(track.Id, quality)
-		if track.DownloadLink == "" {
+	// Resolve each track's stream URL. The official getFileUrl 401s fast, but the
+	// proxy fallback is one slow HTTP round trip per track — serialized, a
+	// 20-track album keeps the download waiting ~1-2 minutes. Resolve
+	// concurrently (bounded so we don't hammer the proxy) and assemble results
+	// in track order.
+	type resolvedTrack struct {
+		track    File
+		link     string
+		proxyFmt int
+		official bool
+	}
+	items := itemsResult.Array()
+	results := make([]resolvedTrack, len(items))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, value := range items {
+		wg.Add(1)
+		go func(i int, value gjson.Result) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var track File
+			var valueString = value.String()
+			track.Id = int(gjson.Get(valueString, "id").Int())
+			track.Name = gjson.Get(valueString, "title").String()
+			track.Index = gjson.Get(valueString, "track_number").String()
+			track.mediaNumber = gjson.Get(valueString, "media_number").String()
+			track.isrc = gjson.Get(valueString, "isrc").String()
+			track.duration = gjson.Get(valueString, "duration").Int()
+			track.completed = false
+
+			var official bool
+			var proxyFmt int
+			link := ""
+			if NavLink != "" {
+				// Full-length Navidrums backend gets first shot; the official token
+				// may be free-tier and only serve 30 s samples.
+				var nerr error
+				link, proxyFmt, nerr = navGetStreamUrl(track.Id, quality)
+				if nerr != nil {
+					link = ""
+					if Debug {
+						fmt.Println("Navidrums stream failed for track "+track.Name+" ("+strconv.Itoa(track.Id)+"):", nerr)
+					}
+				}
+			}
+			if link == "" {
+				link = qobuzGetTrackStreamUrl(track.Id, quality)
+				if link != "" {
+					official = true
+				}
+			}
+			results[i] = resolvedTrack{track: track, link: link, proxyFmt: proxyFmt, official: official}
+		}(i, value)
+	}
+	wg.Wait()
+
+	var officialStreams int
+	var proxyStreams int
+	proxyFormat := 0
+	for _, r := range results {
+		track := r.track
+		track.DownloadLink = r.link
+		if r.link != "" {
+			if r.official {
+				officialStreams += 1
+			} else {
+				proxyStreams += 1
+			}
+			if r.proxyFmt != 0 {
+				proxyFormat = r.proxyFmt
+			}
+			download.Files = append(download.Files, track)
+		} else {
 			fmt.Println("Couldn't get a download link for track " + track.Name + " (" + strconv.Itoa(track.Id) + "), skipping...")
 			download.skippedTracks += 1
-		} else {
-			download.Files = append(download.Files, track)
 		}
-		return true
-	})
+	}
+
+	// If the proxy took over every stream and demoted the format, relabel the
+	// release so the folder name and file extension match the actual bytes.
+	if proxyStreams > 0 && officialStreams == 0 && proxyFormat != 0 && strconv.Itoa(proxyFormat) != download.Quality {
+		fmt.Println("Stream backend served format", proxyFormat, "for all", proxyStreams, "tracks (requested", download.Quality+"); relabelling release")
+		download.Quality = strconv.Itoa(proxyFormat)
+	}
+
+	// Rebuild folder name to match the release name format served by the indexer.
+	if download.Artist != "" && download.Album != "" {
+		download.FileName = sanitizeFilename(download.Artist + "-" + download.Album)
+		if download.Quality == "5" {
+			download.FileName += "-WEB-320-MP3-" + download.Year + "-SQUIDWTF"
+		} else {
+			sr := gjson.Get(bodyStr, "maximum_sampling_rate").Float()
+			if sr == 0 {
+				sr = gjson.Get(bodyStr, "data.maximum_sampling_rate").Float()
+			}
+			if sr < 1000 && sr > 0 {
+				sr *= 1000
+			}
+			if sr == 0 {
+				sr = 44100
+			}
+			bd := gjson.Get(bodyStr, "maximum_bit_depth").Int()
+			if bd == 0 {
+				bd = gjson.Get(bodyStr, "data.maximum_bit_depth").Int()
+			}
+			if bd == 0 {
+				bd = 16
+			}
+			srKHz := strconv.FormatFloat(sr/1000, 'f', -1, 64)
+			download.FileName += "-" + strconv.FormatInt(bd, 10) + "BIT-" + srKHz + "-KHZ-WEB-FLAC-" + download.Year + "-SQUIDWTF"
+		}
+	}
 
 	// Base completion on the tracks we actually discovered and got a link for, so a
 	// job can't stay "incomplete" forever (relevant when track/search must be used as
@@ -594,6 +706,98 @@ func history(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// mp3DurationSeconds returns the duration of an MPEG1 Layer III file by
+// walking its frame headers (bitrate table + frame length). Returns 0 on
+// parse failure or non-MP3 content. Used to detect 30-second free-account
+// samples, which are valid MP3s that would otherwise look like full tracks.
+func mp3DurationSeconds(path string) float64 {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) < 4 {
+		return 0
+	}
+	off := 0
+	if len(data) >= 10 && data[0] == 'I' && data[1] == 'D' && data[2] == '3' {
+		size := int(data[6]&0x7f)<<21 | int(data[7]&0x7f)<<14 | int(data[8]&0x7f)<<7 | int(data[9]&0x7f)
+		off = 10 + size
+	}
+	bitrates := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+	rates := [4]int{44100, 48000, 32000, 0}
+	var frames int
+	var bitrate, rate int
+	for off+4 <= len(data) {
+		h := binary.BigEndian.Uint32(data[off : off+4])
+		if h>>21 != 0x7ff {
+			break
+		}
+		if (h>>19)&3 != 3 || (h>>17)&3 != 1 { // MPEG1 Layer III only
+			off++
+			continue
+		}
+		if bitrate == 0 {
+			bitrate = bitrates[(h>>12)&0xf]
+			rate = rates[(h>>10)&3]
+			if bitrate == 0 || rate == 0 {
+				return 0
+			}
+		}
+		off += 144*bitrate*1000/rate + int((h>>9)&1)
+		frames++
+	}
+	if rate == 0 || frames == 0 {
+		return 0
+	}
+	return float64(frames) * 1152 / float64(rate)
+}
+
+// flacDurationSeconds measures a FLAC file's real duration from STREAMINFO so a
+// 30-second sample can't pass as a full track. Handles both plain FLAC and the
+// MP4/FLAC container Qobuz uses for 24-bit files (fLaC header, then a dfLa box).
+// isPreviewLength decides whether a downloaded file is a 30 s sample rather than
+// the real track. Qobuz previews are cut at 30 s, so a file is only suspect when
+// it is far shorter than the catalog duration; a genuinely short interlude
+// (30 s track) must not be flagged.
+func isPreviewLength(measured, expected float64) bool {
+	if measured <= 0 {
+		return false
+	}
+	if expected > 0 {
+		return measured < expected*0.8 && expected-measured > 30
+	}
+	return measured < 60
+}
+
+func flacDurationSeconds(path string) float64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	head := make([]byte, 64*1024)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+
+	idx := bytes.Index(head, []byte("fLaC"))
+	if idx < 0 {
+		return 0
+	}
+	stream := head[idx:]
+	if d := bytes.Index(stream, []byte("dfLa")); d >= 0 && len(stream) >= d+8 {
+		stream = append([]byte("fLaC"), stream[d+8:]...)
+	}
+	if len(stream) < 26 {
+		return 0
+	}
+
+	info := binary.BigEndian.Uint64(stream[18:26])
+	rate := info >> 44
+	samples := info & ((1 << 36) - 1)
+	if rate == 0 || samples == 0 {
+		return 0
+	}
+	return float64(samples) / float64(rate)
+}
+
 func sanitizeFilename(name string) string {
 	// Forbidden characters on Windows: < > : " / \ | ? *
 	re := regexp.MustCompile(`[<>:"/\\|?*]`)
@@ -662,6 +866,10 @@ func startDownload(Id string) {
 	if download == nil {
 		return
 	}
+	if download.Source == "deezer" {
+		startDeezerDownload(Id)
+		return
+	}
 
 	//create folder
 	var Folder string = filepath.Join(DownloadPath, "incomplete", Category, download.FileName)
@@ -702,7 +910,27 @@ func startDownload(Id string) {
 			track.completed = true
 			download.downloaded += 1
 			writeMetaData(*download, track, filepath.Join(trackFolder, Name))
+			// Free Qobuz accounts only get 30-second samples; a sample is a
+			// valid audio file so it "succeeds" silently. Flag it by measured
+			// duration so previews can never masquerade as full tracks.
+			dur := 0.0
+			if download.Quality == "5" {
+				dur = mp3DurationSeconds(filepath.Join(trackFolder, Name))
+			} else {
+				dur = flacDurationSeconds(filepath.Join(trackFolder, Name))
+			}
+			if dur > 0 && isPreviewLength(dur, float64(track.duration)) {
+				download.previewTracks += 1
+				fmt.Printf("PREVIEW DETECTED: %q is only %.0f s (30s free-account sample)\n", track.Name, dur)
+			}
 		}
+	}
+
+	// If every track came back as a sample, say so in the folder name instead
+	// of silently delivering previews as full tracks.
+	if download.downloaded > 0 && download.previewTracks >= download.downloaded {
+		fmt.Println("WARNING: no full-length tracks downloaded — token only has free-account preview access; marking folder")
+		download.FileName += "-30S-SAMPLE"
 	}
 
 	//Download (should be) complete, move to complete folder
@@ -712,6 +940,15 @@ func startDownload(Id string) {
 	}
 	if download.skippedTracks > 0 {
 		fmt.Printf("Skipped %d track(s) with no download link\n", download.skippedTracks)
+	}
+	// Re-downloading an already-completed release collides with the existing
+	// complete folder: Windows rename refuses to overwrite, which strands the
+	// finished download in incomplete where the next startup deletes it.
+	// Remove the stale copy (same release) before moving.
+	if _, statErr := os.Stat(destFolder); statErr == nil {
+		if rmErr := os.RemoveAll(destFolder); rmErr != nil {
+			fmt.Println("Couldn't remove old complete folder:", destFolder, rmErr)
+		}
 	}
 	err = os.Rename(Folder, destFolder)
 	if err != nil {

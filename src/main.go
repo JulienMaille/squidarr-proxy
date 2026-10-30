@@ -12,41 +12,13 @@ import (
 var DownloadPath string
 var Category string
 var Port string
-var ApiLink string
+var NavLink string
 var ApiKey string
 var QualityId string
 var Debug bool
 var QobuzToken string
-
-func apiRequest(endpoint string) (*http.Response, error) {
-	url := ApiLink + endpoint
-
-	if Debug {
-		fmt.Println("Making request to:", url)
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Always send headers required by the new API
-	req.Header.Set("accept", "*/*")
-	req.Header.Set("accept-language", "fr-FR,fr;q=0.9,en-US;q=0.8,en-GB;q=0.7,en;q=0.6,it-IT;q=0.5,it;q=0.4,sv;q=0.3")
-	req.Header.Set("dnt", "1")
-	req.Header.Set("origin", "https://monochrome.tf")
-	req.Header.Set("priority", "u=1, i")
-	req.Header.Set("sec-ch-ua", `"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"`)
-	req.Header.Set("sec-ch-ua-mobile", "?0")
-	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
-	req.Header.Set("sec-fetch-dest", "empty")
-	req.Header.Set("sec-fetch-mode", "cors")
-	req.Header.Set("sec-fetch-site", "cross-site")
-	req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0")
-
-	client := &http.Client{}
-	return client.Do(req)
-}
+var Provider string
+var DeezerAPIKey string
 
 func getEnv(key string, fallback string) string {
 	value := os.Getenv(key)
@@ -60,13 +32,14 @@ func main() {
 	DownloadPath = getEnv("DOWNLOAD_PATH", "/data/squidarr/")
 	Category = getEnv("CATEGORY", "music")
 	Port = getEnv("PORT", "8687")
-	// Alternative API links:
-	// ApiLink = getEnv("API_LINK", "https://qobuz.squid.wtf/api")
-	// ApiLink = getEnv("API_LINK", "https://qobuz-api1.onrender.com")
-	// ApiLink = getEnv("API_LINK", "https://trypt-hifi-dl-456461932686.us-west1.run.app")
-	ApiLink = getEnv("API_LINK", "https://qobuz-api.stremio123.duckdns.org")
 	ApiKey = getEnv("API_KEY", "")
+	Provider = "both"
+	DeezerAPIKey = getEnv("DEEZER_API_KEY", "")
 	QobuzToken = getEnv("QOBUZ_TOKEN", "")
+	NavLink = getEnv("QOBUZ_NAV_LINK", "")
+	if NavLink != "" {
+		fmt.Println("Navidrums Qobuz backend configured:", NavLink)
+	}
 
 	if QobuzToken != "" {
 		fmt.Println("Qobuz token configured, will use official API")

@@ -90,15 +90,24 @@
         .result-release { color: var(--text-muted); font-size: 0.85em; font-weight: normal; margin-top: 2px; }
         .result-meta { color: var(--text-muted); font-size: 0.9em; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         
-        .status { text-align: center; margin: 15px 0; font-weight: 500; }
+        .results-toolbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 15px 0; padding: 10px 0; background: var(--bg); }
+        .status { text-align: left; margin: 0; font-weight: 500; }
         .error { color: #ef4444; }
         .success { color: #22c55e; }
 
         .load-more-container { display: flex; justify-content: center; margin: 20px 0 40px; }
+        .source-tabs { display: flex; justify-content: flex-end; gap: 8px; margin: 0; }
+        .source-tab { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+        .source-tab.active { background: var(--primary); color: white; border-color: var(--primary); }
+        .download-button[data-state="pending"] { cursor: progress; }
+        .download-button[data-state="queued"] { background: #16a34a; cursor: default; }
+        .download-button[data-state="error"] { background: #dc2626; }
 
         @media (max-width: 600px) {
             .result-item { flex-direction: column; text-align: center; }
             .input-group { flex-direction: column; }
+            .results-toolbar { align-items: flex-start; flex-direction: column; }
+            .source-tabs { justify-content: flex-start; flex-wrap: wrap; }
         }
     </style>
 </head>
@@ -106,14 +115,6 @@
 
 <div class="container">
     <h1>Squidarr Proxy Client</h1>
-
-    <div class="card">
-        <div class="input-group">
-            <input type="text" id="serverUrl" placeholder="Server URL (e.g. http://localhost:8687)">
-            <input type="password" id="apiKey" placeholder="API Key">
-            <button onclick="saveConfig()" class="secondary">Save Config</button>
-        </div>
-    </div>
 
     <div class="card">
         <form id="searchForm" onsubmit="handleSearch(event)">
@@ -138,11 +139,26 @@
         </form>
     </div>
 
-    <div id="status" class="status"></div>
+    <div class="results-toolbar">
+        <div id="status" class="status"></div>
+        <div class="source-tabs" role="tablist" aria-label="Filter results by source">
+            <button type="button" class="source-tab active" data-source="all" onclick="setSourceFilter('all')" role="tab" aria-selected="true">All <span id="allCount">0</span></button>
+            <button type="button" class="source-tab" data-source="qobuz" onclick="setSourceFilter('qobuz')" role="tab" aria-selected="false">Qobuz <span id="qobuzCount">0</span></button>
+            <button type="button" class="source-tab" data-source="deezer" onclick="setSourceFilter('deezer')" role="tab" aria-selected="false">Deezer <span id="deezerCount">0</span></button>
+        </div>
+    </div>
     <div id="results" class="results"></div>
 
     <div class="load-more-container">
         <button id="loadMoreBtn" onclick="handleSearch(null, true)" style="display: none;">Load More</button>
+    </div>
+
+    <div class="card">
+        <div class="input-group">
+            <input type="text" id="serverUrl" placeholder="Server URL (e.g. http://localhost:8687)">
+            <input type="password" id="apiKey" placeholder="API Key">
+            <button onclick="saveConfig()" class="secondary">Save Config</button>
+        </div>
     </div>
 </div>
 
@@ -159,6 +175,7 @@
     const resultsDiv = document.getElementById('results');
 
     let allResults = []; // Cache for dynamic filtering
+    let sourceFilter = 'all';
     let currentOffset = 0;
     const limit = 20;
 
@@ -168,6 +185,13 @@
     qualitySelect.value = localStorage.getItem('squidarr_pref_quality') || 'flac';
     typeFilterSelect.value = localStorage.getItem('squidarr_pref_type') || 'all';
     sortSelect.value = localStorage.getItem('squidarr_pref_sort') || 'relevance';
+
+    // Restore a ?q= search from the URL so F5/reload keeps the results.
+    const urlQuery = new URLSearchParams(window.location.search).get('q');
+    if (urlQuery) {
+        searchInput.value = urlQuery;
+        handleSearch(null);
+    }
 
     function saveConfig() {
         localStorage.setItem('squidarr_url', serverUrlInput.value.replace(/\/$/, ''));
@@ -210,6 +234,12 @@
             allResults = [];
             currentOffset = 0;
             resultsDiv.innerHTML = '';
+            // Keep the query in the URL so F5/reload restores the results.
+            const params = new URLSearchParams(window.location.search);
+            if (query) params.set('q', query);
+            else params.delete('q');
+            const qs = params.toString();
+            history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
         }
 
         showStatus(isLoadMore ? 'Loading more...' : 'Searching...');
@@ -260,6 +290,7 @@
                         genre: attrs.genre || '',
                         artistName: attrs.artist || '',
                         albumName: attrs.album || '',
+                        source: attrs.source || 'qobuz',
                         sizeMB: attrs.size ? (parseInt(attrs.size) / (1024 * 1024)).toFixed(1) : '0',
                         duration: formatDuration(parseInt(attrs.duration || 0))
                     });
@@ -285,6 +316,7 @@
         resultsDiv.innerHTML = '';
         
         let filtered = allResults.filter(item => {
+            if (sourceFilter !== 'all' && item.source !== sourceFilter) return false;
             if (typeFilter === 'album') return item.tracksCount > 1;
             if (typeFilter === 'single') return item.tracksCount === 1;
             return true;
@@ -294,8 +326,21 @@
         else if (sortBy === 'oldest') filtered.sort((a, b) => a.timestamp - b.timestamp);
         else filtered.sort((a, b) => a.index - b.index);
 
+        document.getElementById('allCount').textContent = allResults.length;
+        document.getElementById('qobuzCount').textContent = allResults.filter(item => item.source === 'qobuz').length;
+        document.getElementById('deezerCount').textContent = allResults.filter(item => item.source === 'deezer').length;
+        document.querySelectorAll('.source-tab').forEach(tab => {
+            const selected = tab.dataset.source === sourceFilter;
+            tab.classList.toggle('active', selected);
+            tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+        });
         showStatus(`Showing ${filtered.length} of ${allResults.length} results.`);
         filtered.forEach(renderResult);
+    }
+
+    function setSourceFilter(source) {
+        sourceFilter = source;
+        applyFilters();
     }
 
     function renderResult(data) {
@@ -310,20 +355,28 @@
                         <div class="result-release">${data.title}</div>
                     </a>
                 </div>
-                <div class="result-meta">${data.genre ? data.genre + ' • ' : ''}${data.pubDate}</div>
+                <div class="result-meta">Source: ${data.source} • ${data.genre ? data.genre + ' • ' : ''}${data.pubDate}</div>
                 <div class="result-meta">${data.tracksCount} tracks • ${data.duration} • ${data.sizeMB} MB</div>
             </div>
-            <button onclick="download('${data.nzbUrl}', '${data.title.replace(/'/g, "\\'")}')">Download</button>
         `;
+        const downloadButton = document.createElement('button');
+        downloadButton.className = 'download-button';
+        downloadButton.textContent = 'Download';
+        downloadButton.addEventListener('click', () => download(data.nzbUrl, data.title, downloadButton));
+        div.appendChild(downloadButton);
         resultsDiv.appendChild(div);
     }
 
-    async function download(nzbPath, title) {
+    async function download(nzbPath, title, button) {
+        if (button.disabled) return;
         const server = serverUrlInput.value.replace(/\/$/, '');
         const key = apiKeyInput.value;
         const fullNzbUrl = nzbPath.startsWith('http') ? nzbPath : server + nzbPath;
 
         try {
+            button.disabled = true;
+            button.dataset.state = 'pending';
+            button.textContent = 'Starting…';
             showStatus(`Preparing download: ${title}...`);
             const nzbResponse = await fetch(fullNzbUrl);
             if (!nzbResponse.ok) throw new Error('Failed to fetch NZB file');
@@ -339,9 +392,16 @@
 
             if (!uploadResponse.ok) throw new Error('Failed to start download on server');
             const result = await uploadResponse.json();
-            if (result.status) showStatus(`Download started: ${title}`, 'success');
+            if (result.status) {
+                button.dataset.state = 'queued';
+                button.textContent = 'Queued';
+                showStatus(`Download queued: ${title}`, 'success');
+            }
             else throw new Error('Server returned failure status');
         } catch (err) {
+            button.disabled = false;
+            button.dataset.state = 'error';
+            button.textContent = 'Retry';
             showStatus('Download Error: ' + err.message, 'error');
         }
     }

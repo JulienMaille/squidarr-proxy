@@ -7,7 +7,7 @@ echo =================================
 REM Default values
 set PORT=8687
 set CATEGORY=music
-set TZ=Europe/Berlin
+set TZ=Europe/Paris
 set QUALITY=flac
 
 REM Check for config file
