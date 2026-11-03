@@ -19,6 +19,7 @@ var Debug bool
 var QobuzToken string
 var Provider string
 var DeezerAPIKey string
+var TidalAPILink string
 
 func getEnv(key string, fallback string) string {
 	value := os.Getenv(key)
@@ -37,6 +38,15 @@ func main() {
 	DeezerAPIKey = getEnv("DEEZER_API_KEY", "")
 	QobuzToken = getEnv("QOBUZ_TOKEN", "")
 	NavLink = getEnv("QOBUZ_NAV_LINK", "")
+	TidalAPILink = getEnv("TIDAL_API_LINK", "")
+	for _, base := range strings.Split(TidalAPILink, ",") {
+		if base = strings.TrimSpace(base); base != "" {
+			tidalEndpoints = append(tidalEndpoints, base)
+		}
+	}
+	if tidalConfigured() {
+		fmt.Println("Tidal hifi-api backend configured:", strings.Join(tidalEndpoints, ", "))
+	}
 	if NavLink != "" {
 		fmt.Println("Navidrums Qobuz backend configured:", NavLink)
 	}
@@ -107,7 +117,8 @@ func main() {
 }
 
 func isSquidarrReleaseFolder(name string) bool {
-	return strings.Contains(name, "-SQUIDWTF") || strings.Contains(name, "-QOBUZ") || strings.Contains(name, "-DEEZER")
+	return strings.Contains(name, "-SQUIDWTF") || strings.Contains(name, "-QOBUZ") ||
+		strings.Contains(name, "-DEEZER") || strings.Contains(name, "-TIDAL")
 }
 
 func corsHandler(h http.HandlerFunc) http.HandlerFunc {

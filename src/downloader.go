@@ -296,6 +296,10 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 		generateDeezerDownload(filename, Id, qualityParam)
 		return
 	}
+	if source == "tidal" {
+		generateTidalDownload(filename, Id, qualityParam)
+		return
+	}
 	// Heal accents that may have arrived as Latin-1 instead of UTF-8.
 	artistHint = fixEncoding(artistHint)
 	albumHint = fixEncoding(albumHint)
@@ -869,6 +873,10 @@ func startDownload(Id string) {
 	}
 	if download.Source == "deezer" {
 		startDeezerDownload(Id)
+		return
+	}
+	if download.Source == "tidal" {
+		startTidalDownload(Id)
 		return
 	}
 

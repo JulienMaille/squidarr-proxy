@@ -1,6 +1,6 @@
 # squidarr-proxy
 
-Complete your Lidarr library with Qobuz and Deezer search and downloads.
+Complete your Lidarr library with Qobuz, Deezer and Tidal search and downloads.
 
 ## Setup
 
@@ -10,6 +10,8 @@ Use the included [docker-compose](docker-compose.yml) as reference for creating 
 ### Configuration
 
 Searches return Qobuz and Deezer results together; each result identifies its source and downloads through that provider. Set an authorized `DEEZER_API_KEY` in `config.env` to enable Deezer downloads. Deezer downloads use FLAC directly; `QUALITY=mp3-320` selects MP3 for Qobuz results.
+
+Tidal is added by pointing `TIDAL_API_LINK` at one or more hifi-api instances. It joins the combined search only when that variable is set, and only LOSSLESS is accepted: the instance hands back a signed DASH manifest whose audio is FLAC carried in fMP4, which squidarr-proxy remuxes into a native `.flac` (`fLaC` header from the manifest's STREAMINFO, then the concatenated segment payloads). No transcoder is bundled, so an instance that demotes the request to HIGH (AAC) is refused rather than written as a broken file. Public instances share one Tidal account and stop streaming whenever that account is banned, which is why the variable takes a list.
 
 ### Sharing with a friend
 For Windows, send the ZIP attached to a GitHub Release (not **Code → Download ZIP**). Your friend should copy `config.env.example` to `config.env`, set a private `API_KEY` and `DOWNLOAD_PATH`, then run `start_squidarr.bat`. Do not upload `config.env` or paste its secrets into GitHub. Treat credentials as passwords; preferably give your friend a separate instance/key rather than access to a server containing private data. The client is `client/index.html`.
@@ -28,6 +30,7 @@ The following environment variables can be used to configure squidarr-proxy. You
 | `DEBUG` | Enable debug logging (`true`/`false`). | `false` |
 | `QOBUZ_TOKEN` | Optional Qobuz `user_auth_token` for direct official-API access. Tokens rotate and may be limited to 30-second previews. | (none) |
 | `QOBUZ_NAV_LINK` | Qobuz search, album metadata, and full-length streaming backend. | `https://qobuz.itzsantiax.qzz.io` (configure in `config.env`) |
+| `TIDAL_API_LINK` | Tidal hifi-api base URL(s), comma separated. Enables Tidal in search and downloads; omit to leave Tidal out entirely. | (none) |
 | `APP_ID` / `APP_SECRET` | Optional Qobuz app credentials used to sign official-API requests. | Built-in defaults |
 
 Use only credentials issued for your own account or application, and follow the provider's terms. Do not use shared token pools or credentials copied from third-party projects.

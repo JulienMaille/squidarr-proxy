@@ -179,10 +179,14 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 	if Provider == "deezer" {
 		return deezerSearchAlbums(query, limit, offset)
 	}
+	if Provider == "tidal" {
+		return tidalSearchAlbums(query, limit, offset)
+	}
 	if Provider == "qobuz" {
 		return fetchQobuzAlbums(query, limit, offset, qualityParam)
 	}
-	// Fetch from both catalogs before applying the combined pagination window.
+	// Fetch from every configured catalog before applying the combined
+	// pagination window.
 	qobuz := fetchQobuzAlbums(query, limit+offset, 0, qualityParam)
 	deezer := deezerSearchAlbums(query, limit+offset, 0)
 	for i := range qobuz {
@@ -191,8 +195,17 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 	for i := range deezer {
 		deezer[i].Source = "deezer"
 	}
-	combined := mergeProviderAlbums(qobuz, deezer)
-	fmt.Printf("Combined search %q: Qobuz=%d Deezer=%d\n", query, len(qobuz), len(deezer))
+	// Tidal joins the combined search only when a hifi-api backend is
+	// configured: without one the source cannot resolve a single track.
+	var tidal []Album
+	if tidalConfigured() {
+		tidal = tidalSearchAlbums(query, limit+offset, 0)
+		for i := range tidal {
+			tidal[i].Source = "tidal"
+		}
+	}
+	combined := mergeProviderAlbums(qobuz, deezer, tidal)
+	fmt.Printf("Combined search %q: Qobuz=%d Deezer=%d Tidal=%d\n", query, len(qobuz), len(deezer), len(tidal))
 	if offset >= len(combined) {
 		return nil
 	}
@@ -204,15 +217,22 @@ func fetchAlbums(query string, limit int, offset int, qualityParam string) []Alb
 }
 
 // mergeProviderAlbums interleaves providers so one source cannot crowd out the
-// other when the caller requests a short page (typically the first 10 results).
-func mergeProviderAlbums(qobuz, deezer []Album) []Album {
-	combined := make([]Album, 0, len(qobuz)+len(deezer))
-	for i := 0; i < len(qobuz) || i < len(deezer); i++ {
-		if i < len(qobuz) {
-			combined = append(combined, qobuz[i])
+// others when the caller requests a short page (typically the first 10 results).
+func mergeProviderAlbums(sources ...[]Album) []Album {
+	longest := 0
+	total := 0
+	for _, source := range sources {
+		total += len(source)
+		if len(source) > longest {
+			longest = len(source)
 		}
-		if i < len(deezer) {
-			combined = append(combined, deezer[i])
+	}
+	combined := make([]Album, 0, total)
+	for i := 0; i < longest; i++ {
+		for _, source := range sources {
+			if i < len(source) {
+				combined = append(combined, source[i])
+			}
 		}
 	}
 	return combined
@@ -416,6 +436,9 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 		if album.Source == "deezer" {
 			resultQuality = "7" // Deezer downloads remain FLAC without transcoding.
 		}
+		if album.Source == "tidal" {
+			resultQuality = "7" // Tidal LOSSLESS is native FLAC; HIGH is refused.
+		}
 		if resultQuality == "5" {
 			album.Size = int64(320 * 1000 * album.Duration / 8)
 		}
@@ -513,6 +536,9 @@ func releaseName(album Album, quality string) (name string) {
 func releaseProviderTag(source string) string {
 	if strings.EqualFold(source, "deezer") {
 		return "DEEZER"
+	}
+	if strings.EqualFold(source, "tidal") {
+		return "TIDAL"
 	}
 	return "QOBUZ"
 }
