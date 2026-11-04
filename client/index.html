@@ -145,6 +145,7 @@
             <button type="button" class="source-tab active" data-source="all" onclick="setSourceFilter('all')" role="tab" aria-selected="true">All <span id="allCount">0</span></button>
             <button type="button" class="source-tab" data-source="qobuz" onclick="setSourceFilter('qobuz')" role="tab" aria-selected="false">Qobuz <span id="qobuzCount">0</span></button>
             <button type="button" class="source-tab" data-source="deezer" onclick="setSourceFilter('deezer')" role="tab" aria-selected="false">Deezer <span id="deezerCount">0</span></button>
+            <button type="button" class="source-tab" data-source="tidal" onclick="setSourceFilter('tidal')" role="tab" aria-selected="false">Tidal <span id="tidalCount">0</span></button>
         </div>
     </div>
     <div id="results" class="results"></div>
@@ -329,6 +330,7 @@
         document.getElementById('allCount').textContent = allResults.length;
         document.getElementById('qobuzCount').textContent = allResults.filter(item => item.source === 'qobuz').length;
         document.getElementById('deezerCount').textContent = allResults.filter(item => item.source === 'deezer').length;
+        document.getElementById('tidalCount').textContent = allResults.filter(item => item.source === 'tidal').length;
         document.querySelectorAll('.source-tab').forEach(tab => {
             const selected = tab.dataset.source === sourceFilter;
             tab.classList.toggle('active', selected);
