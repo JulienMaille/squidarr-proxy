@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -23,7 +24,11 @@ import (
 // list until one answers.
 var tidalEndpoints []string
 
-const tidalFLACQuality = "LOSSLESS"
+// Asking for LOSSLESS yields FLAC when the backing account is HiFi and HIGH
+// (AAC-LC, 320 kbit/s) when it is Premium. TIDAL_QUALITY=HIGH asks for AAC
+// outright, which is what a smaller library wants; the default prefers FLAC and
+// still accepts AAC when an instance demotes the request.
+var tidalQuality = "LOSSLESS"
 
 func tidalConfigured() bool { return len(tidalEndpoints) > 0 }
 
@@ -235,19 +240,76 @@ func generateTidalDownload(filename, id, _ string) {
 		return
 	}
 	d.numTracks = len(d.Files)
-	d.FileName = sanitizeFilename(fmt.Sprintf("%s-%s-16BIT-44.1-KHZ-WEB-FLAC-%s-TIDAL", d.Artist, d.Album, d.Year))
+	// The folder has to name the quality that is actually inside it, because
+	// that is what Lidarr reads. One probe answers for the album: the tier is a
+	// property of the account behind the instance, not of the track.
+	codec := tidalAlbumCodec(d.Files)
+	d.Quality = "7"
+	d.FileName = sanitizeFilename(tidalReleaseName(d.Artist, d.Album, d.Year, codec))
+	if (tidalQuality == "HIGH") != (codec == tidalCodecAAC) {
+		fmt.Printf("Tidal served %s although %s was requested; the release is named after what it served\n", codec, tidalQuality)
+	}
 	d.downloaded = 0
 }
 
-// --- DASH manifest → native FLAC -------------------------------------------
+// tidalAlbumCodec probes the first tracks that answer and returns the codec the
+// instance serves for this album. A few tracks are tried because a per-track 403
+// is routine; if none answers, FLAC is assumed and the download reports its own
+// failure.
+func tidalAlbumCodec(files []File) string {
+	for i, track := range files {
+		if i >= 3 {
+			break
+		}
+		stream, _, err := tidalTrackManifest(track.Id)
+		if err != nil {
+			continue
+		}
+		return stream.codec
+	}
+	return tidalCodecFLAC
+}
+
+func tidalReleaseName(artist, album, year, codec string) string {
+	if codec == tidalCodecAAC {
+		return fmt.Sprintf("%s-%s-WEB-AAC-320-%s-TIDAL", artist, album, year)
+	}
+	return fmt.Sprintf("%s-%s-16BIT-44.1-KHZ-WEB-FLAC-%s-TIDAL", artist, album, year)
+}
+
+// tidalAACQualityCode is the sentinel the indexer and releaseName use for the
+// AAC tier, the way "5" flags MP3 and "7" flags FLAC.
+const tidalAACQualityCode = "aac-320"
+
+func tidalQualityCode() string {
+	if tidalQuality == "HIGH" {
+		return tidalAACQualityCode
+	}
+	return "7"
+}
+
+// --- DASH manifest -> native audio -----------------------------------------
 //
 // Tidal returns one signed MPD per track and the proxy exposes it base64-encoded
-// in data.manifest. For LOSSLESS the representation is FLAC carried in fMP4:
-// the initialization segment holds the FLAC STREAMINFO in its stsd/dfLa box and
-// every media segment is moof+mdat whose mdat payload is raw FLAC frames. So a
-// valid .flac is "fLaC" + that STREAMINFO block + the concatenated mdat payloads,
-// with no transcoder involved. HIGH is AAC in fMP4 and is refused instead: it
-// cannot be converted without an external encoder this project does not ship.
+// in data.manifest. Two representations exist: LOSSLESS is FLAC carried in fMP4,
+// HIGH is AAC-LC carried in fMP4. Neither needs a transcoder, only a different
+// container:
+//
+//   - FLAC: the initialization segment holds the STREAMINFO in its stsd/dfLa box
+//     and every media segment is moof+mdat whose mdat payload is raw FLAC frames.
+//     A native .flac is "fLaC" + that STREAMINFO block + the concatenated mdat
+//     payloads.
+//   - AAC: the initialization segment is ftyp+moov(+mvex) and each media segment
+//     is moof+mdat holding raw AAC access units. Concatenating init and every
+//     segment whole yields a fragmented MP4, which is the .m4a the CDN streams.
+//
+// FLAC is preferred whenever the instance offers it; HIGH is accepted as the
+// fallback (a Premium-backed account is demoted to it), never refused.
+
+const (
+	tidalCodecFLAC = "flac"
+	tidalCodecAAC  = "aac"
+)
 
 type dashSegmentTemplate struct {
 	Timescale      int64  `xml:"timescale,attr"`
@@ -278,8 +340,11 @@ type dashManifest struct {
 }
 
 type tidalStream struct {
+	codec        string
+	timescale    int64
 	initURL      string
 	segmentURL   []string
+	segmentTicks int64 // duration declared by the MPD timeline, in timescale units
 	init         []byte
 	streamInfo   []byte
 	sampleRate   int
@@ -291,41 +356,65 @@ func parseDashManifest(mpd []byte) (*tidalStream, error) {
 	if err := xml.Unmarshal(mpd, &manifest); err != nil {
 		return nil, fmt.Errorf("unreadable DASH manifest: %w", err)
 	}
-	for _, period := range manifest.Periods {
-		for _, set := range period.AdaptationSets {
-			if set.ContentType != "" && set.ContentType != "audio" {
-				continue
-			}
-			for _, rep := range set.Representations {
-				if !strings.Contains(strings.ToLower(rep.Codecs), "flac") {
+	// Two passes so a FLAC representation always beats an AAC one when an
+	// instance offers both.
+	for _, want := range []string{"flac", "mp4a"} {
+		for _, period := range manifest.Periods {
+			for _, set := range period.AdaptationSets {
+				if set.ContentType != "" && set.ContentType != "audio" {
 					continue
 				}
-				tpl := rep.SegmentTemplate
-				if tpl == nil || tpl.Initialization == "" || tpl.Media == "" {
-					return nil, errors.New("DASH manifest has no segment template")
+				for _, rep := range set.Representations {
+					if !strings.Contains(strings.ToLower(rep.Codecs), want) {
+						continue
+					}
+					stream, err := streamFromRepresentation(rep, want)
+					if err != nil {
+						return nil, err
+					}
+					return stream, nil
 				}
-				number := tpl.StartNumber
-				if number == 0 {
-					number = 1
-				}
-				count := 0
-				for _, s := range tpl.Timeline {
-					count += int(s.R) + 1
-				}
-				if count == 0 {
-					return nil, errors.New("DASH manifest has no segment timeline")
-				}
-				stream := &tidalStream{
-					initURL: expandTemplate(tpl.Initialization, rep, number),
-				}
-				for i := 0; i < count; i++ {
-					stream.segmentURL = append(stream.segmentURL, expandTemplate(tpl.Media, rep, number+int64(i)))
-				}
-				return stream, nil
 			}
 		}
 	}
-	return nil, errors.New("Tidal did not return a FLAC representation")
+	return nil, errors.New("Tidal did not return a FLAC or AAC representation")
+}
+
+func streamFromRepresentation(rep dashRepresentation, codec string) (*tidalStream, error) {
+	tpl := rep.SegmentTemplate
+	if tpl == nil || tpl.Initialization == "" || tpl.Media == "" {
+		return nil, errors.New("DASH manifest has no segment template")
+	}
+	number := tpl.StartNumber
+	if number == 0 {
+		number = 1
+	}
+	count := 0
+	var ticks int64
+	for _, s := range tpl.Timeline {
+		repeats := s.R
+		if repeats < 0 {
+			return nil, errors.New("DASH manifest uses an unbounded segment timeline")
+		}
+		count += int(repeats) + 1
+		ticks += s.D * (repeats + 1)
+	}
+	if count == 0 {
+		return nil, errors.New("DASH manifest has no segment timeline")
+	}
+	if codec == "mp4a" {
+		codec = tidalCodecAAC
+	}
+	stream := &tidalStream{
+		codec:        codec,
+		timescale:    tpl.Timescale,
+		initURL:      expandTemplate(tpl.Initialization, rep, number),
+		segmentTicks: ticks,
+	}
+	for i := 0; i < count; i++ {
+		stream.segmentURL = append(stream.segmentURL, expandTemplate(tpl.Media, rep, number+int64(i)))
+	}
+	return stream, nil
 }
 
 func expandTemplate(tpl string, rep dashRepresentation, number int64) string {
@@ -492,54 +581,87 @@ func tidalFetchBytes(rawURL string, maxBytes int64, timeout time.Duration) ([]by
 	return body, nil
 }
 
-func fetchTidalStream(trackID int) (*tidalStream, error) {
+// tidalTrackManifest resolves the signed manifest for one track without
+// fetching any media, which is enough to learn the codec an instance serves.
+func tidalTrackManifest(trackID int) (*tidalStream, gjson.Result, error) {
 	params := url.Values{
 		"id":      {strconv.Itoa(trackID)},
-		"quality": {tidalFLACQuality},
+		"quality": {tidalQuality},
 	}
 	result, err := tidalJSON("/track/?" + params.Encode())
 	if err != nil {
-		return nil, err
+		return nil, gjson.Result{}, err
 	}
 	data := result.Get("data")
 	if !data.Exists() || !data.Get("manifest").Exists() {
-		return nil, errors.New("Tidal returned no manifest for this track")
+		return nil, gjson.Result{}, errors.New("Tidal returned no manifest for this track")
 	}
 	if presentation := data.Get("assetPresentation").String(); presentation != "" && presentation != "FULL" {
-		return nil, fmt.Errorf("Tidal returned %s audio, not a full track", presentation)
+		return nil, gjson.Result{}, fmt.Errorf("Tidal returned %s audio, not a full track", presentation)
 	}
 	if mime := data.Get("manifestMimeType").String(); mime != "" && mime != "application/dash+xml" {
-		return nil, fmt.Errorf("unexpected manifest type %s", mime)
+		return nil, gjson.Result{}, fmt.Errorf("unexpected manifest type %s", mime)
 	}
 	mpd, err := base64.StdEncoding.DecodeString(data.Get("manifest").String())
 	if err != nil {
-		return nil, fmt.Errorf("undecodable manifest: %w", err)
+		return nil, gjson.Result{}, fmt.Errorf("undecodable manifest: %w", err)
 	}
 	stream, err := parseDashManifest(mpd)
 	if err != nil {
-		return nil, err
+		return nil, gjson.Result{}, err
 	}
 	stream.sampleRate = int(data.Get("sampleRate").Int())
+	return stream, data, nil
+}
+
+func fetchTidalStream(trackID int) (*tidalStream, error) {
+	stream, _, err := tidalTrackManifest(trackID)
+	if err != nil {
+		return nil, err
+	}
 
 	init, err := tidalFetchBytesWithRetry(stream.initURL, 4<<20)
 	if err != nil {
 		return nil, fmt.Errorf("initialization segment: %w", err)
 	}
 	stream.init = init
-	streamInfo, err := extractFlacStreamInfoBlock(init)
-	if err != nil {
-		return nil, err
+
+	if stream.codec == tidalCodecFLAC {
+		streamInfo, err := extractFlacStreamInfoBlock(init)
+		if err != nil {
+			return nil, err
+		}
+		stream.streamInfo = streamInfo
+		rate, samples, err := flacStreamInfo(streamInfo[4:])
+		if err != nil {
+			return nil, err
+		}
+		if stream.sampleRate == 0 {
+			stream.sampleRate = rate
+		}
+		stream.totalSamples = samples
+		return stream, nil
 	}
-	stream.streamInfo = streamInfo
-	rate, samples, err := flacStreamInfo(streamInfo[4:])
-	if err != nil {
-		return nil, err
+	if _, ok := findBoxPath(init, "moov", "trak", "mdia", "minf", "stbl", "stsd"); !ok {
+		return nil, errors.New("initialization segment has no stsd box")
 	}
-	if stream.sampleRate == 0 {
-		stream.sampleRate = rate
+	if len(init) < 8 || !bytes.Contains(init, []byte("mp4a")) {
+		return nil, errors.New("initialization segment is not an AAC sample entry")
 	}
-	stream.totalSamples = samples
 	return stream, nil
+}
+
+// streamDuration is the duration the manifest itself declares, in seconds.
+func (s *tidalStream) streamDuration() float64 {
+	if s.codec == tidalCodecFLAC {
+		if s.sampleRate > 0 && s.totalSamples > 0 {
+			return float64(s.totalSamples) / float64(s.sampleRate)
+		}
+	}
+	if s.timescale > 0 && s.segmentTicks > 0 {
+		return float64(s.segmentTicks) / float64(s.timescale)
+	}
+	return 0
 }
 
 func tidalFetchBytesWithRetry(rawURL string, maxBytes int64) ([]byte, error) {
@@ -609,42 +731,311 @@ func writeTidalFlac(dest string, stream *tidalStream) error {
 	return nil
 }
 
-func tidalDurationSeconds(path string) float64 {
-	return flacDurationSeconds(path)
-}
-
-func tidalDownloadTrack(dest string, track File) error {
-	stream, err := fetchTidalStream(track.Id)
+// writeTidalM4a assembles the fragmented MP4 the CDN streams: the
+// initialization segment (ftyp+moov+mvex) followed by every moof+mdat segment
+// in order. No sample table has to be rebuilt — fragmented MP4 is what a DASH
+// player consumes, and players read it as a normal .m4a.
+func writeTidalM4a(dest string, stream *tidalStream) error {
+	f, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
-	if stream.sampleRate > 0 && stream.totalSamples > 0 {
-		encoded := float64(stream.totalSamples) / float64(stream.sampleRate)
-		if track.duration > 0 {
-			tolerance := float64(track.duration) * 0.05
-			if tolerance < 5 {
-				tolerance = 5
-			}
-			if diff := encoded - float64(track.duration); diff > tolerance || diff < -tolerance {
-				return fmt.Errorf("manifest duration %.1fs does not match the track's %ds", encoded, track.duration)
-			}
-		}
-	}
-	if err := writeTidalFlac(dest, stream); err != nil {
+	cleanup := func(err error) error {
+		f.Close()
+		os.Remove(dest)
 		return err
 	}
-	duration := tidalDurationSeconds(dest)
-	if duration <= 0 || track.duration <= 0 {
-		return fmt.Errorf("invalid FLAC duration %.1f / %d", duration, track.duration)
+
+	init := stream.init
+	if _, ok := findBoxPath(init, "moov", "mvex"); !ok {
+		// Without mvex a player treats the file as a plain MP4 with empty
+		// sample tables and plays nothing.
+		return cleanup(errors.New("initialization segment is not fragmented (no mvex box)"))
 	}
-	tolerance := float64(track.duration) * 0.05
+	if _, err := f.Write(init); err != nil {
+		return cleanup(err)
+	}
+
+	var audio uint64
+	var ticks int64
+	for i, segmentURL := range stream.segmentURL {
+		segment, err := tidalFetchBytesWithRetry(segmentURL, 64<<20)
+		if err != nil {
+			return cleanup(fmt.Errorf("segment %d: %w", i+1, err))
+		}
+		mdat, ok := findBox(segment, "mdat")
+		if !ok {
+			return cleanup(fmt.Errorf("segment %d has no mdat box", i+1))
+		}
+		duration, err := fragmentSampleDuration(segment)
+		if err != nil {
+			return cleanup(fmt.Errorf("segment %d: %w", i+1, err))
+		}
+		if duration <= 0 {
+			return cleanup(fmt.Errorf("segment %d declares no sample duration", i+1))
+		}
+		ticks += duration
+		if _, err := f.Write(segment); err != nil {
+			return cleanup(err)
+		}
+		audio += uint64(len(mdat))
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(dest)
+		return err
+	}
+	if audio == 0 {
+		os.Remove(dest)
+		return errors.New("Tidal stream carried no audio")
+	}
+	if stream.timescale > 0 {
+		stream.segmentTicks = ticks
+	}
+	return nil
+}
+
+// fragmentSampleDuration sums the sample durations declared by one media
+// segment: trun per-sample durations when present, tfhd's default otherwise.
+func fragmentSampleDuration(segment []byte) (int64, error) {
+	traf, ok := findBoxPath(segment, "moof", "traf")
+	if !ok {
+		return 0, errors.New("fragment has no traf box")
+	}
+	boxes, err := readBoxes(traf)
+	if err != nil {
+		return 0, err
+	}
+	var defaultDuration int64
+	var total int64
+	for _, b := range boxes {
+		switch b.typ {
+		case "tfhd":
+			defaultDuration, err = tfhdDefaultDuration(b.payload)
+			if err != nil {
+				return 0, err
+			}
+		case "trun":
+			duration, err := trunDuration(b.payload, defaultDuration)
+			if err != nil {
+				return 0, err
+			}
+			total += duration
+		}
+	}
+	return total, nil
+}
+
+func tfhdDefaultDuration(p []byte) (int64, error) {
+	if len(p) < 8 {
+		return 0, errors.New("truncated tfhd box")
+	}
+	flags := uint32(p[1])<<16 | uint32(p[2])<<8 | uint32(p[3])
+	pos := 8
+	if flags&0x000001 != 0 {
+		pos += 8
+	}
+	if flags&0x000002 != 0 {
+		pos += 4
+	}
+	if flags&0x000008 == 0 {
+		return 0, nil
+	}
+	if len(p) < pos+4 {
+		return 0, errors.New("truncated tfhd box")
+	}
+	return int64(binary.BigEndian.Uint32(p[pos:])), nil
+}
+
+func trunDuration(p []byte, defaultDuration int64) (int64, error) {
+	if len(p) < 8 {
+		return 0, errors.New("truncated trun box")
+	}
+	flags := uint32(p[1])<<16 | uint32(p[2])<<8 | uint32(p[3])
+	count := int(binary.BigEndian.Uint32(p[4:]))
+	pos := 8
+	if flags&0x000001 != 0 {
+		pos += 4
+	}
+	if flags&0x000004 != 0 {
+		pos += 4
+	}
+	var total int64
+	for i := 0; i < count; i++ {
+		duration := defaultDuration
+		if flags&0x000100 != 0 {
+			if len(p) < pos+4 {
+				return 0, errors.New("truncated trun box")
+			}
+			duration = int64(binary.BigEndian.Uint32(p[pos:]))
+			pos += 4
+		}
+		if flags&0x000200 != 0 {
+			pos += 4
+		}
+		if flags&0x000400 != 0 {
+			pos += 4
+		}
+		if flags&0x000800 != 0 {
+			pos += 4
+		}
+		if pos > len(p) {
+			return 0, errors.New("truncated trun box")
+		}
+		total += duration
+	}
+	return total, nil
+}
+
+// mp4DurationSeconds measures a written .m4a by reading its timescale from the
+// initialization segment and summing the durations of every fragment on disk,
+// so a truncated download is caught exactly like a truncated FLAC.
+func mp4DurationSeconds(path string) float64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0
+	}
+
+	var timescale int64
+	var ticks int64
+	offset := int64(0)
+	for offset < info.Size() {
+		var header [16]byte
+		if _, err := f.ReadAt(header[:8], offset); err != nil {
+			break
+		}
+		size := int64(binary.BigEndian.Uint32(header[:4]))
+		typ := string(header[4:8])
+		headerLen := int64(8)
+		if size == 1 {
+			if _, err := f.ReadAt(header[8:16], offset+8); err != nil {
+				break
+			}
+			size = int64(binary.BigEndian.Uint64(header[8:16]))
+			headerLen = 16
+		} else if size == 0 {
+			size = info.Size() - offset
+		}
+		if size < headerLen || offset+size > info.Size() {
+			break
+		}
+
+		switch typ {
+		case "moov":
+			if timescale == 0 {
+				if raw := make([]byte, size-headerLen); func() bool {
+					_, err := f.ReadAt(raw, offset+headerLen)
+					return err == nil
+				}() {
+					timescale = mp4Timescale(raw)
+				}
+			}
+		case "moof":
+			raw := make([]byte, size-headerLen)
+			if _, err := f.ReadAt(raw, offset+headerLen); err != nil {
+				break
+			}
+			duration, err := fragmentSampleDuration(boxBytes(typ, raw))
+			if err != nil {
+				return 0
+			}
+			ticks += duration
+		}
+		offset += size
+	}
+	if timescale <= 0 || ticks <= 0 {
+		return 0
+	}
+	return float64(ticks) / float64(timescale)
+}
+
+// mp4Timescale reads the movie timescale from mdia/mdhd.
+func mp4Timescale(moov []byte) int64 {
+	mdhd, ok := findBoxPath(moov, "trak", "mdia", "mdhd")
+	if !ok || len(mdhd) < 16 {
+		return 0
+	}
+	if mdhd[0] == 1 {
+		if len(mdhd) < 28 {
+			return 0
+		}
+		return int64(binary.BigEndian.Uint32(mdhd[20:24]))
+	}
+	return int64(binary.BigEndian.Uint32(mdhd[12:16]))
+}
+
+// boxBytes rebuilds a box so the parsers can work on a fragment read from disk.
+func boxBytes(typ string, payload []byte) []byte {
+	out := make([]byte, 8, 8+len(payload))
+	binary.BigEndian.PutUint32(out[:4], uint32(8+len(payload)))
+	copy(out[4:8], typ)
+	return append(out, payload...)
+}
+
+// tidalDurationSeconds reads the duration of a finished file, whichever
+// container the stream produced.
+func tidalDurationSeconds(path, codec string) float64 {
+	if codec == tidalCodecAAC {
+		return mp4DurationSeconds(path)
+	}
+	return flacDurationSeconds(path)
+}
+
+func tidalTrackExtension(stream *tidalStream) string {
+	if stream.codec == tidalCodecAAC {
+		return ".m4a"
+	}
+	return ".flac"
+}
+
+// durationMatches applies the same ±5 % (minimum 5 s) rule everywhere.
+func durationMatches(value float64, expectedSeconds int64) bool {
+	if value <= 0 || expectedSeconds <= 0 {
+		return false
+	}
+	tolerance := float64(expectedSeconds) * 0.05
 	if tolerance < 5 {
 		tolerance = 5
 	}
-	if diff := duration - float64(track.duration); diff > tolerance || diff < -tolerance {
-		return fmt.Errorf("invalid or truncated FLAC duration %.1f / %d", duration, track.duration)
+	diff := value - float64(expectedSeconds)
+	return diff <= tolerance && diff >= -tolerance
+}
+
+// tidalDownloadTrack writes one track and returns the file it produced, whose
+// extension follows the codec the instance actually served.
+func tidalDownloadTrack(stem string, track File) (string, error) {
+	stream, err := fetchTidalStream(track.Id)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	dest := stem + tidalTrackExtension(stream)
+
+	if encoded := stream.streamDuration(); encoded > 0 && track.duration > 0 {
+		if !durationMatches(encoded, track.duration) {
+			return "", fmt.Errorf("manifest duration %.1fs does not match the track's %ds", encoded, track.duration)
+		}
+	}
+
+	var writeErr error
+	if stream.codec == tidalCodecAAC {
+		writeErr = writeTidalM4a(dest, stream)
+	} else {
+		writeErr = writeTidalFlac(dest, stream)
+	}
+	if writeErr != nil {
+		return "", writeErr
+	}
+
+	duration := tidalDurationSeconds(dest, stream.codec)
+	if !durationMatches(duration, track.duration) {
+		return "", fmt.Errorf("invalid or truncated %s duration %.1f / %d", strings.ToUpper(stream.codec), duration, track.duration)
+	}
+	return dest, nil
 }
 
 func startTidalDownload(id string) {
@@ -660,6 +1051,7 @@ func startTidalDownload(id string) {
 	if d.CoverUrl != "" {
 		_ = grabFile(filepath.Join(folder, "cover.jpg"), d.CoverUrl)
 	}
+	written := 0
 	for i, track := range d.Files {
 		trackNumber := strings.TrimSpace(track.Index)
 		if trackNumber == "" || trackNumber == "0" {
@@ -667,17 +1059,28 @@ func startTidalDownload(id string) {
 		}
 		track.Index = trackNumber
 		stem := filepath.Join(folder, sanitizeFilename(trackNumber+" - "+d.Artist+" - "+track.Name))
-		path := stem + ".flac"
-		if err := tidalDownloadTrack(path, track); err != nil {
-			fmt.Println("Tidal download failed:", track.Name, err)
-			_ = os.Remove(path)
-			d.downloaded = -1
-			return
+		path, err := tidalDownloadTrack(stem, track)
+		if err != nil {
+			// A 403 is per track on this ecosystem: the album may still be
+			// almost entirely streamable, so one dead track is skipped like a
+			// preview rather than sinking the whole release.
+			fmt.Println("Tidal track skipped:", track.Name, err)
+			d.skippedTracks++
+			continue
 		}
 		writeMetaData(*d, track, path)
+		written++
 		if d.downloaded < d.numTracks-1 {
 			d.downloaded++
 		}
+	}
+	if written == 0 {
+		fmt.Println("Tidal download failed: no track could be streamed")
+		d.downloaded = -1
+		return
+	}
+	if d.skippedTracks > 0 {
+		fmt.Printf("Tidal download incomplete: %d/%d tracks skipped\n", d.skippedTracks, d.numTracks)
 	}
 	dest := filepath.Join(DownloadPath, "complete", Category, d.FileName)
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
@@ -694,6 +1097,6 @@ func startTidalDownload(id string) {
 		d.downloaded = -1
 		return
 	}
-	d.downloaded = d.numTracks
+	d.downloaded = written
 	fmt.Println("Tidal download complete:", d.FileName)
 }

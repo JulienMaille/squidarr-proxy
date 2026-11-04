@@ -44,8 +44,12 @@ func main() {
 			tidalEndpoints = append(tidalEndpoints, base)
 		}
 	}
+	tidalQuality = strings.ToUpper(getEnv("TIDAL_QUALITY", tidalQuality))
+	if tidalQuality != "HIGH" {
+		tidalQuality = "LOSSLESS"
+	}
 	if tidalConfigured() {
-		fmt.Println("Tidal hifi-api backend configured:", strings.Join(tidalEndpoints, ", "))
+		fmt.Println("Tidal hifi-api backend configured:", strings.Join(tidalEndpoints, ", "), "quality="+tidalQuality)
 	}
 	if NavLink != "" {
 		fmt.Println("Navidrums Qobuz backend configured:", NavLink)

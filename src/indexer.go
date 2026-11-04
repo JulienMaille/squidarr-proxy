@@ -437,9 +437,9 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 			resultQuality = "7" // Deezer downloads remain FLAC without transcoding.
 		}
 		if album.Source == "tidal" {
-			resultQuality = "7" // Tidal LOSSLESS is native FLAC; HIGH is refused.
+			resultQuality = tidalQualityCode()
 		}
-		if resultQuality == "5" {
+		if resultQuality == "5" || resultQuality == tidalAACQualityCode {
 			album.Size = int64(320 * 1000 * album.Duration / 8)
 		}
 		// Removed regex sanitization of album.Title and album.Artist
@@ -449,8 +449,8 @@ func renderSearchResults(w http.ResponseWriter, u url.URL, query string) {
 		release := time.Unix(album.ReleaseDate, 0)
 		yearStr := strconv.Itoa(release.Year())
 
-		if resultQuality == "5" {
-			// MP3 320
+		if resultQuality == "5" || resultQuality == tidalAACQualityCode {
+			// MP3 320 / AAC-320: lossy, so Lidarr's lossy bucket.
 			categoryName = "Audio > MP3"
 			categoryAttrs = []NewznabAttr{
 				{Name: "category", Value: "3000"},
@@ -525,6 +525,8 @@ func releaseName(album Album, quality string) (name string) {
 	provider := releaseProviderTag(album.Source)
 	if quality == "5" {
 		name = album.Artist + "-" + album.Title + "-WEB-320-MP3-" + strconv.Itoa(release.Year()) + "-" + provider
+	} else if quality == tidalAACQualityCode {
+		name = album.Artist + "-" + album.Title + "-WEB-AAC-320-" + strconv.Itoa(release.Year()) + "-" + provider
 	} else {
 		samplingRateKHz := float64(album.SamplingRate) / 1000.0
 		samplingRateStr := strconv.FormatFloat(samplingRateKHz, 'f', -1, 64)
