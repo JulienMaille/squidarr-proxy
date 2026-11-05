@@ -440,6 +440,7 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 		link     string
 		proxyFmt int
 		official bool
+		reason   string
 	}
 	items := itemsResult.Array()
 	results := make([]resolvedTrack, len(items))
@@ -464,6 +465,7 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 
 			var official bool
 			var proxyFmt int
+			var reason string
 			link := ""
 			if NavLink != "" {
 				// Full-length Navidrums backend gets first shot; the official token
@@ -472,6 +474,7 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 				link, proxyFmt, nerr = navGetStreamUrl(track.Id, quality)
 				if nerr != nil {
 					link = ""
+					reason = nerr.Error()
 					if Debug {
 						fmt.Println("Navidrums stream failed for track "+track.Name+" ("+strconv.Itoa(track.Id)+"):", nerr)
 					}
@@ -481,9 +484,11 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 				link = qobuzGetTrackStreamUrl(track.Id, quality)
 				if link != "" {
 					official = true
+				} else if reason == "" {
+					reason = "the official API returned no stream url (token rejected or the track is not licensed)"
 				}
 			}
-			results[i] = resolvedTrack{track: track, link: link, proxyFmt: proxyFmt, official: official}
+			results[i] = resolvedTrack{track: track, link: link, proxyFmt: proxyFmt, official: official, reason: reason}
 		}(i, value)
 	}
 	wg.Wait()
@@ -505,7 +510,6 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 			}
 			download.Files = append(download.Files, track)
 		} else {
-			fmt.Println("Couldn't get a download link for track " + track.Name + " (" + strconv.Itoa(track.Id) + "), skipping...")
 			download.skippedTracks += 1
 		}
 	}
@@ -544,6 +548,21 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 			srKHz := strconv.FormatFloat(sr/1000, 'f', -1, 64)
 			download.FileName += "-" + strconv.FormatInt(bd, 10) + "BIT-" + srKHz + "-KHZ-WEB-FLAC-" + download.Year + "-" + provider
 		}
+	}
+
+	// If nothing resolved there is no point staging an empty release: say why in
+	// one line instead of repeating "skipping" per track, which is what a dead
+	// backend looks like from the outside.
+	if len(download.Files) == 0 && len(items) > 0 {
+		reason := ""
+		for _, r := range results {
+			if r.reason != "" {
+				reason = r.reason
+				break
+			}
+		}
+		fmt.Printf("Qobuz resolved no stream for any of the %d track(s) of %s: %s\n", len(items), download.Album, reason)
+		download.downloaded = -1
 	}
 
 	// Base completion on the tracks we actually discovered and got a link for, so a
@@ -877,6 +896,12 @@ func startDownload(Id string) {
 	}
 	if download.Source == "tidal" {
 		startTidalDownload(Id)
+		return
+	}
+
+	if len(download.Files) == 0 {
+		fmt.Println("Nothing to download for " + download.FileName + ": no track could be resolved")
+		download.downloaded = -1
 		return
 	}
 

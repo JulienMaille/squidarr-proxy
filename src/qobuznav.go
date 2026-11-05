@@ -244,6 +244,12 @@ func navGetStreamUrl(trackID int, quality string) (string, int, error) {
 		streamURL = gjson.GetBytes(body, "url").String()
 	}
 	if streamURL == "" {
+		if backendErr := gjson.GetBytes(body, "error").String(); backendErr != "" {
+			// The backend explains the refusal ("Account is blocked", "token sin
+			// licencia ... devuelve preview de 30s"); dropping it leaves the caller
+			// with an unactionable "no stream url".
+			return "", 0, fmt.Errorf("navidrums refused track %d: %s", trackID, backendErr)
+		}
 		return "", 0, fmt.Errorf("navidrums returned no stream url for track %d", trackID)
 	}
 	if strings.Contains(streamURL, "range=") {
