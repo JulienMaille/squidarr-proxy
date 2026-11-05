@@ -115,6 +115,9 @@ func main() {
 	http.HandleFunc("/indexer", corsHandler(handleIndexerRequest))
 	http.HandleFunc("/downloader/api", corsHandler(handleDownloaderRequest))
 	http.HandleFunc("/api/download", corsHandler(handleSimpleDownload))
+	// A single track: registered before the /api/ catch-all, which would
+	// otherwise answer "missing id parameter" for /api/track.
+	http.HandleFunc("/api/track", corsHandler(handleTrackDownload))
 	http.HandleFunc("/api/", corsHandler(handleSimpleDownload)) // also serve at /api/ for doc purposes
 	fmt.Println("Listening on port " + Port + "...")
 	http.ListenAndServe(":"+Port, nil)

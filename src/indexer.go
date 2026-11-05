@@ -403,6 +403,12 @@ func fetchAlbumsOfficial(query string, limit int) []Album {
 
 func search(w http.ResponseWriter, u url.URL) {
 	query := u.Query().Get("q")
+	// type=track returns one item per song instead of one per release; the client
+	// asks for it from its "Singles" tab, Lidarr never sends it.
+	if u.Query().Get("type") == "track" {
+		renderTrackResults(w, u, query)
+		return
+	}
 	renderSearchResults(w, u, query)
 }
 
