@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Probe every known public Qobuz backend and report what it can actually do.
 
 The ecosystem moves fast: a host that answered `STREAMS` last month can serve
@@ -37,6 +37,8 @@ CTX.verify_mode = ssl.CERT_NONE
 
 SEARCH_QUERY = "Daft Punk Random Access Memories"
 TIDAL_TRACK_ID = 243673459
+QOBUZ_TRACK_ID = "9140024"
+MIRROR_API_KEY = "ak_8e3f1a7c2b5d9e4f0a6c3b8d1e5f2a9c7b4d0e6f"
 NAV_QUALITIES = ("6", "27", "7")
 MIN_AUDIO_BYTES = 256 * 1024
 
@@ -65,6 +67,9 @@ CANDIDATES = [
     # Tidal frontends that fall back to Qobuz audio
     "https://api-one.yupify.qzz.io",
     "https://api-two.yupify.qzz.io",
+    # Antra's shared mirrors (endpoints listed in its public gist manifest)
+    "https://qobuz.anandserver.cfd",
+    "https://arcod.xyz",
     # SpotiFLAC community pool (HMAC session obtained through a browser challenge)
     "https://qbz-oss.spotbye.qzz.io",
     "https://tdl-oss.spotbye.qzz.io",
@@ -287,6 +292,41 @@ def probe_yupify(base, res):
     return True
 
 
+def probe_mirror_root(base, res):
+    """A mirror can answer its own health route while every real call hangs on the
+    upstream account; that is a stalled pool, not a dead server."""
+    for path in ("/", "/health"):
+        try:
+            status, body, _ = http(base + path, timeout=20)
+        except urllib.error.HTTPError:
+            continue
+        except Exception:
+            continue
+        payload = as_json(body)
+        if status == 200 and payload and (payload.get("service") or payload.get("mirror") or "mirror" in str(payload).lower()):
+            res["root"] = str(payload)[:120]
+            try:
+                status, audio, headers = http(
+                    f"{base}/api/stream/{QOBUZ_TRACK_ID}",
+                    headers={"X-API-Key": MIRROR_API_KEY, "Accept": "audio/flac, */*"},
+                    timeout=45,
+                    limit=300000,
+                )
+            except Exception as e:
+                res["reason"] = f"root ok, stream call failed: {str(e)[:70]}"
+                res["verdict"] = "STALLED"
+                return True
+            ctype = (headers.get("Content-Type") or "").lower()
+            if status in (200, 206) and audio[:4] == b"fLaC" and len(audio) > 8192:
+                res["verdict"] = "STREAMS"
+                res["audio"] = {"status": status, "type": ctype, "partial": len(audio)}
+                return True
+            res["reason"] = f"root ok, /api/stream/{QOBUZ_TRACK_ID} -> HTTP {status} {ctype or 'no content-type'}"
+            res["verdict"] = "STALLED"
+            return True
+    return False
+
+
 def probe(host):
     base = host.rstrip("/")
     res = {"host": base}
@@ -300,11 +340,15 @@ def probe(host):
     if res.get("verdict"):
         return res
     found = probe_session_routes(base, res) or found
+    if res.get("verdict"):
+        return res
+    if not found:
+        found = probe_mirror_root(base, res) or found
     res.setdefault("verdict", "META_ONLY" if found else "DEAD")
     return res
 
 
-ORDER = {"STREAMS": 0, "PREVIEW": 1, "YUPIFY_CACHE": 2, "SESSION": 3, "META_ONLY": 4, "DEAD": 5}
+ORDER = {"STREAMS": 0, "PREVIEW": 1, "YUPIFY_CACHE": 2, "SESSION": 3, "STALLED": 4, "META_ONLY": 5, "DEAD": 6}
 
 
 def main():
