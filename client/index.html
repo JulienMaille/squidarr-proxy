@@ -124,20 +124,17 @@
                     <option value="flac" selected>FLAC</option>
                     <option value="mp3-320">MP3</option>
                 </select>
-                <select id="typeFilterSelect" onchange="savePrefs(); applyFilters()">
+                <select id="typeFilterSelect" onchange="savePrefs(); applyFilters(); maybeResearch()">
                     <option value="all">All</option>
                     <option value="album">Albums</option>
-                    <option value="single">Singles</option>
+                    <option value="single">EPs &amp; Singles</option>
+                    <option value="track">Tracks</option>
                 </select>
                 <select id="sortSelect" onchange="savePrefs(); applyFilters()">
                     <option value="relevance">Relevance</option>
                     <option value="newest">Newest</option>
                     <option value="oldest">Oldest</option>
                 </select>
-                <div class="source-tabs" role="group" aria-label="Search releases or single tracks">
-                    <button type="button" class="source-tab active" id="modeAlbum" onclick="setSearchMode('album')" aria-pressed="true">Albums</button>
-                    <button type="button" class="source-tab" id="modeTrack" onclick="setSearchMode('track')" aria-pressed="false">Singles</button>
-                </div>
                 <button type="submit" id="searchBtn">Search</button>
             </div>
         </form>
@@ -181,9 +178,23 @@
 
     let allResults = []; // Cache for dynamic filtering
     let sourceFilter = 'all';
-    let searchMode = 'album'; // 'album' searches releases, 'track' searches single tracks
     let currentOffset = 0;
     const limit = 20;
+
+    // One selector says both what to look for and, for a release search, which
+    // releases to keep: "Tracks" searches single songs, the rest filters the
+    // release list by size (a one-track release is an EP or a single).
+    function searchMode() {
+        return typeFilterSelect.value === 'track' ? 'track' : 'album';
+    }
+
+    function maybeResearch() {
+        // Switching to or from a track search changes the question, so the old
+        // results are meaningless and the query has to be sent again. The quality
+        // picker does not apply either: a single track is FLAC on both sources.
+        qualitySelect.disabled = searchMode() === 'track';
+        if (searchInput.value.trim()) handleSearch();
+    }
 
     // Load config and preferences
     serverUrlInput.value = localStorage.getItem('squidarr_url') || (window.location.origin === 'null' || window.location.origin.startsWith('file') ? 'http://localhost:8687' : window.location.origin);
@@ -191,8 +202,7 @@
     qualitySelect.value = localStorage.getItem('squidarr_pref_quality') || 'flac';
     typeFilterSelect.value = localStorage.getItem('squidarr_pref_type') || 'all';
     sortSelect.value = localStorage.getItem('squidarr_pref_sort') || 'relevance';
-    searchMode = localStorage.getItem('squidarr_pref_mode') || 'album';
-    applySearchMode();
+    qualitySelect.disabled = searchMode() === 'track';
 
     // Restore a ?q= search from the URL so F5/reload keeps the results.
     const urlQuery = new URLSearchParams(window.location.search).get('q');
@@ -211,26 +221,6 @@
         localStorage.setItem('squidarr_pref_quality', qualitySelect.value);
         localStorage.setItem('squidarr_pref_type', typeFilterSelect.value);
         localStorage.setItem('squidarr_pref_sort', sortSelect.value);
-        localStorage.setItem('squidarr_pref_mode', searchMode);
-    }
-
-    function applySearchMode() {
-        document.getElementById('modeAlbum').classList.toggle('active', searchMode !== 'track');
-        document.getElementById('modeAlbum').setAttribute('aria-pressed', searchMode === 'track' ? 'false' : 'true');
-        document.getElementById('modeTrack').classList.toggle('active', searchMode === 'track');
-        document.getElementById('modeTrack').setAttribute('aria-pressed', searchMode === 'track' ? 'true' : 'false');
-        // The Albums/Singles filter only means something for a release search,
-        // and a single track is FLAC on both sources whatever the picker says.
-        typeFilterSelect.disabled = searchMode === 'track';
-        qualitySelect.disabled = searchMode === 'track';
-    }
-
-    function setSearchMode(mode) {
-        const changed = mode !== searchMode;
-        searchMode = mode;
-        applySearchMode();
-        savePrefs();
-        if (changed && searchInput.value.trim()) handleSearch();
     }
 
     function showStatus(msg, type = '') {
@@ -277,7 +267,7 @@
         try {
             let url = `${server}/indexer?t=search&q=${encodeURIComponent(query)}&apikey=${key}&limit=${limit}&offset=${currentOffset}`;
             if (quality) url += `&quality=${quality}`;
-            if (searchMode === 'track') url += `&type=track`;
+            if (searchMode() === 'track') url += `&type=track`;
             
             const response = await fetch(url);
             if (!response.ok) throw new Error(`Server returned ${response.status}`);
@@ -342,7 +332,7 @@
 
     function applyFilters() {
         // In track mode every result is a single track, so the release filter is off.
-        const typeFilter = searchMode === 'track' ? 'all' : typeFilterSelect.value;
+        const typeFilter = searchMode() === 'track' ? 'all' : typeFilterSelect.value;
         const sortBy = sortSelect.value;
         resultsDiv.innerHTML = '';
         
@@ -378,7 +368,7 @@
     function renderResult(data) {
         const div = document.createElement('div');
         div.className = 'result-item';
-        const isTrack = searchMode === 'track';
+        const isTrack = searchMode() === 'track';
         const mainLine = isTrack
             ? `<span>${data.artistName}</span> - <span>${data.trackName || data.title}</span>`
             : `<span>${data.artistName}</span> - <span>${data.albumName}</span>`;
@@ -422,7 +412,7 @@
 
         // A single track does not go through SABnzbd: the enclosure already
         // points at the endpoint that resolves and writes the file.
-        if (searchMode === 'track') {
+        if (searchMode() === 'track') {
             try {
                 button.disabled = true;
                 button.dataset.state = 'pending';
