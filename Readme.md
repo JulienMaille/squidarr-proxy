@@ -38,6 +38,8 @@ Use only credentials issued for your own account or application, and follow the 
 
 The retired `API_LINK` and premium Eclipse stream fallback have been removed after endpoint checks returned HTTP 503 and 404 respectively. Qobuz uses Navidrums, then the optional official API credentials.
 
+Public Qobuz backends come and go. `python tools/qobuz_backend_probe.py` probes every host the project knows about with all four route shapes, fetches real audio for a searched track, and prints a verdict per host (`STREAMS`, `PREVIEW`, `SESSION`, `META_ONLY`, `DEAD`). Run it before blaming the proxy when Qobuz downloads stop resolving: a backend that answers search but refuses every stream is a blocked pool, not a broken installation.
+
 ### Windows (No Docker)
 See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for instructions on how to run this on Windows without Docker.
 
