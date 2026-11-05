@@ -120,7 +120,12 @@ func main() {
 	http.HandleFunc("/api/track", corsHandler(handleTrackDownload))
 	http.HandleFunc("/api/", corsHandler(handleSimpleDownload)) // also serve at /api/ for doc purposes
 	fmt.Println("Listening on port " + Port + "...")
-	http.ListenAndServe(":"+Port, nil)
+	// A silent exit is indistinguishable from "it didn't start": another instance
+	// holding the port, or a port below 1024, is the usual cause.
+	if err := http.ListenAndServe(":"+Port, nil); err != nil {
+		fmt.Println("Couldn't listen on port " + Port + ": " + err.Error())
+		os.Exit(1)
+	}
 }
 
 func isSquidarrReleaseFolder(name string) bool {
