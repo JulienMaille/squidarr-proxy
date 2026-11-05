@@ -69,6 +69,7 @@ type Download struct {
 	Year          string
 	UPC           string
 	CoverUrl      string
+	FailMessage   string
 	numTracks     int
 	mediaCount    int
 	label         string
@@ -283,6 +284,7 @@ func addfile(w http.ResponseWriter, r *http.Request) {
 	//send response using QobuzId as nzo_id
 	w.Write([]byte("{\n" +
 		"\"status\": true,\n" +
+		"\"id\": \"" + Id + "\",\n" +
 		"\"nzo_ids\": [\"SABnzbd_nzo_" + Id + "\"]\n" +
 		"}"))
 }
@@ -314,6 +316,7 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 		quality = QualityId
 	}
 	download.Quality = quality
+	download.FailMessage = ""
 
 	var bodyStr string
 	var tracksJSON string
@@ -562,6 +565,7 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 			}
 		}
 		fmt.Printf("Qobuz resolved no stream for any of the %d track(s) of %s: %s\n", len(items), download.Album, reason)
+		download.FailMessage = reason
 		download.downloaded = -1
 	}
 
@@ -592,6 +596,7 @@ type QueueSlot struct {
 	Percentage   string   `json:"percentage"`
 	NzoId        string   `json:"nzo_id"`
 	UnpackOpts   string   `json:"unpackopts"`
+	FailMessage  string   `json:"fail_message"`
 }
 
 type Queue struct {
@@ -612,6 +617,33 @@ func queue(w http.ResponseWriter, r *http.Request) {
 		var download Download = *Downloads[id]
 		if download.downloaded == download.numTracks {
 			//shouldnt be in queue anymore, skipping
+			continue
+		}
+		if download.downloaded == -1 {
+			// A download that gave up is not "in progress": reporting it as
+			// Downloading at 0 % forever is what made a dead backend look healthy.
+			slots = append(slots, QueueSlot{
+				Status:       "Failed",
+				Index:        index,
+				Filename:     download.FileName,
+				FailMessage:  download.FailMessage,
+				Percentage:   "100",
+				Size:         "100 MB",
+				SizeLeft:     "0 MB",
+				Mb:           "100",
+				MbLeft:       "0",
+				MbMissing:    "0.0",
+				Labels:       []string{},
+				Priority:     "Normal",
+				Cat:          Category,
+				UnpackOpts:   "3",
+				DirectUnpack: "0/0",
+				Password:     "",
+				Script:       "None",
+				AvgAge:       "2895d",
+				NzoId:        "SABnzbd_nzo_" + download.Id,
+			})
+			index++
 			continue
 		}
 		//Don't know how long the download will take, so estimating 10 seconds per track remaining
@@ -901,6 +933,7 @@ func startDownload(Id string) {
 
 	if len(download.Files) == 0 {
 		fmt.Println("Nothing to download for " + download.FileName + ": no track could be resolved")
+		download.FailMessage = "no track could be resolved"
 		download.downloaded = -1
 		return
 	}

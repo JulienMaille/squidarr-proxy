@@ -237,6 +237,7 @@ func generateTidalDownload(filename, id, _ string) {
 	if len(d.Files) == 0 || int64(len(d.Files)) != expected {
 		fmt.Printf("Tidal album track list is incomplete: %d/%d\n", len(d.Files), expected)
 		d.downloaded = -1
+		d.FailMessage = "the track list is incomplete"
 		return
 	}
 	d.numTracks = len(d.Files)
@@ -1046,6 +1047,7 @@ func startTidalDownload(id string) {
 	folder := filepath.Join(DownloadPath, "incomplete", Category, d.FileName)
 	if err := os.MkdirAll(folder, 0755); err != nil {
 		d.downloaded = -1
+		d.FailMessage = "the destination folder could not be created"
 		return
 	}
 	if d.CoverUrl != "" {
@@ -1077,6 +1079,7 @@ func startTidalDownload(id string) {
 	if written == 0 {
 		fmt.Println("Tidal download failed: no track could be streamed")
 		d.downloaded = -1
+		d.FailMessage = "no track could be streamed"
 		return
 	}
 	if d.skippedTracks > 0 {
@@ -1085,16 +1088,19 @@ func startTidalDownload(id string) {
 	dest := filepath.Join(DownloadPath, "complete", Category, d.FileName)
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		d.downloaded = -1
+		d.FailMessage = "the destination folder could not be created"
 		return
 	}
 	if _, err := os.Stat(dest); err == nil {
 		fmt.Println("Tidal destination already exists:", dest)
 		d.downloaded = -1
+		d.FailMessage = "this release is already in the complete folder"
 		return
 	}
 	if err := os.Rename(folder, dest); err != nil {
 		fmt.Println("Tidal import staging failed:", err)
 		d.downloaded = -1
+		d.FailMessage = "staging the download failed"
 		return
 	}
 	d.downloaded = written

@@ -339,6 +339,7 @@ func startDeezerDownload(id string) {
 	folder := filepath.Join(DownloadPath, "incomplete", Category, d.FileName)
 	if err := os.MkdirAll(folder, 0755); err != nil {
 		d.downloaded = -1
+		d.FailMessage = "the destination folder could not be created"
 		return
 	}
 	if d.CoverUrl != "" {
@@ -356,6 +357,7 @@ func startDeezerDownload(id string) {
 			fmt.Println("Deezer download failed:", track.Name, err)
 			_ = os.Remove(path)
 			d.downloaded = -1
+			d.FailMessage = "the track could not be downloaded"
 			return
 		}
 		writeMetaData(*d, track, path)
@@ -366,16 +368,19 @@ func startDeezerDownload(id string) {
 	dest := filepath.Join(DownloadPath, "complete", Category, d.FileName)
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		d.downloaded = -1
+		d.FailMessage = "the destination folder could not be created"
 		return
 	}
 	if _, err := os.Stat(dest); err == nil {
 		fmt.Println("Deezer destination already exists:", dest)
 		d.downloaded = -1
+		d.FailMessage = "this release is already in the complete folder"
 		return
 	}
 	if err := os.Rename(folder, dest); err != nil {
 		fmt.Println("Deezer import staging failed:", err)
 		d.downloaded = -1
+		d.FailMessage = "staging the download failed"
 		return
 	}
 	d.downloaded = d.numTracks

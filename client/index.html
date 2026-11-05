@@ -463,17 +463,41 @@
 
             if (!uploadResponse.ok) throw new Error('Failed to start download on server');
             const result = await uploadResponse.json();
-            if (result.status) {
-                button.dataset.state = 'queued';
-                button.textContent = 'Queued';
-                showStatus(`Download queued: ${title}`, 'success');
-            }
-            else throw new Error('Server returned failure status');
+            if (!result.status) throw new Error('Server returned failure status');
+            const jobId = result.id || (result.nzo_ids && result.nzo_ids[0] ? result.nzo_ids[0].replace('SABnzbd_nzo_', '') : '');
+            button.dataset.state = 'queued';
+            button.textContent = 'Queued';
+            showStatus(`Download queued: ${title}`, 'success');
+            if (jobId) watchQueueOutcome(server, key, jobId, button, title);
+            return;
         } catch (err) {
             button.disabled = false;
             button.dataset.state = 'error';
             button.textContent = 'Retry';
             showStatus('Download Error: ' + err.message, 'error');
+        }
+    }
+
+    // The queue is the only place the truth shows up: a release whose tracks could
+    // not be resolved reports Failed there, and a green "Queued" forever is a lie.
+    async function watchQueueOutcome(server, key, jobId, button, title) {
+        const nzoId = 'SABnzbd_nzo_' + jobId;
+        for (const delay of [2500, 9000, 20000]) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+            try {
+                const res = await fetch(`${server}/downloader/api?mode=queue&output=json&apikey=${key}`);
+                if (!res.ok) continue;
+                const body = await res.json();
+                const slot = (body.queue && body.queue.slots || []).find(s => s.nzo_id === nzoId);
+                if (!slot) return;
+                if (slot.status === 'Failed') {
+                    button.disabled = false;
+                    button.dataset.state = 'error';
+                    button.textContent = 'Failed';
+                    showStatus(`Download failed: ${title}${slot.fail_message ? ' — ' + slot.fail_message : ''}`, 'error');
+                    return;
+                }
+            } catch (e) { /* the server may restart mid-poll; the next round will see it */ }
         }
     }
 </script>
