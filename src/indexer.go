@@ -239,6 +239,11 @@ func mergeProviderAlbums(sources ...[]Album) []Album {
 }
 
 func fetchQobuzAlbums(query string, limit int, offset int, qualityParam string) []Album {
+	// Offering albums that can never be downloaded is worse than offering none.
+	if NavLink != "" && !qobuzStreamUsable() {
+		fmt.Println("Qobuz skipped: " + qobuzUnavailableReason())
+		return nil
+	}
 	quality := qualityParam
 	if quality == "" || quality == "default" {
 		quality = QualityId
