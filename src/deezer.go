@@ -21,7 +21,18 @@ import (
 )
 
 var deezerCatalogURL = "https://api.deezer.com"
-var deezerStreamURL = "https://deezer.anandserver.cfd"
+var deezerMirrorURL = "https://deezer.anandserver.cfd"
+
+// deezerStreamInfo is what the mirror's /api/track route returns. The relay
+// route (/api/stream/{id}) fails with a Cloudflare 502 whenever its proxy pool
+// is unhealthy, while /api/track only resolves the CDN URL and keeps working,
+// so the audio is fetched straight from Deezer's CDN and decrypted here.
+type deezerStreamInfo struct {
+	StreamURL     string `json:"streamUrl"`
+	FallbackURL   string `json:"fallbackUrl"`
+	DecryptionKey string `json:"decryptionKey"`
+	Detail        string `json:"detail"`
+}
 
 type deezerByteCounter int64
 
@@ -238,12 +249,23 @@ func generateDeezerDownload(filename, id, _ string) {
 	d.downloaded = 0
 }
 
-func deezerDecrypt(dst io.Writer, src io.Reader, id int) error {
+func deezerKeyForID(id int) []byte {
 	hash := md5.Sum([]byte(strconv.Itoa(id)))
 	hexhash := hex.EncodeToString(hash[:])
 	key := make([]byte, 16)
 	for i := range key {
 		key[i] = hexhash[i] ^ hexhash[i+16] ^ "g4el58wc0zvf9na1"[i]
+	}
+	return key
+}
+
+func deezerDecrypt(dst io.Writer, src io.Reader, id int) error {
+	return deezerDecryptWithKey(dst, src, deezerKeyForID(id))
+}
+
+func deezerDecryptWithKey(dst io.Writer, src io.Reader, key []byte) error {
+	if len(key) != 16 {
+		return fmt.Errorf("invalid Deezer decryption key")
 	}
 	block, err := blowfish.NewCipher(key)
 	if err != nil {
@@ -270,20 +292,113 @@ func deezerDecrypt(dst io.Writer, src io.Reader, id int) error {
 	}
 }
 
-func deezerDownloadTrack(dest string, track File) error {
-	base, err := url.Parse(deezerStreamURL)
+// deezerStreamInfoFor asks the mirror for a track's CDN URL and decryption key.
+// The mirror's proxy pool fails requests at random (Cloudflare 502), so a
+// transient failure is retried instead of failing the whole album.
+func deezerStreamInfoFor(trackID int) (deezerStreamInfo, error) {
+	base, err := url.Parse(deezerMirrorURL)
 	if err != nil || base.Host == "" {
-		return fmt.Errorf("invalid Deezer stream URL")
+		return deezerStreamInfo{}, fmt.Errorf("invalid Deezer mirror URL")
 	}
-	endpoint := strings.TrimRight(deezerStreamURL, "/") + "/api/stream/" + strconv.Itoa(track.Id)
-	req, err := http.NewRequest("GET", endpoint, nil)
+	endpoint := strings.TrimRight(deezerMirrorURL, "/") + "/api/track/" + strconv.Itoa(trackID)
+	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		if !strings.EqualFold(r.URL.Host, base.Host) || r.URL.Scheme != base.Scheme {
+			return fmt.Errorf("refusing Deezer credential redirect")
+		}
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects")
+		}
+		return nil
+	}}
+
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
+		}
+		req, err := http.NewRequest("GET", endpoint, nil)
+		if err != nil {
+			return deezerStreamInfo{}, err
+		}
+		req.Header.Set("X-API-Key", DeezerAPIKey)
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("deezer track HTTP %d", resp.StatusCode)
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+				continue
+			}
+			return deezerStreamInfo{}, lastErr
+		}
+		var info deezerStreamInfo
+		if err := json.Unmarshal(body, &info); err != nil {
+			lastErr = fmt.Errorf("invalid Deezer track response")
+			continue
+		}
+		if info.StreamURL == "" {
+			lastErr = fmt.Errorf("deezer track: %s", strings.TrimSpace(info.Detail))
+			continue
+		}
+		return info, nil
+	}
+	return deezerStreamInfo{}, lastErr
+}
+
+func deezerRedirectAllowed(original, next *url.URL) bool {
+	if strings.EqualFold(next.Host, original.Host) {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(original.Hostname()), ".dzcdn.net") &&
+		strings.HasSuffix(strings.ToLower(next.Hostname()), ".dzcdn.net")
+}
+
+func deezerDownloadTrack(dest string, track File) error {
+	info, err := deezerStreamInfoFor(track.Id)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-API-Key", DeezerAPIKey)
+	key := deezerKeyForID(track.Id)
+	if len(info.DecryptionKey) == 16 {
+		key = []byte(info.DecryptionKey)
+	}
+
+	urls := []string{info.StreamURL}
+	if info.FallbackURL != "" && info.FallbackURL != info.StreamURL {
+		urls = append(urls, info.FallbackURL)
+	}
+	var lastErr error
+	for _, streamURL := range urls {
+		if err := deezerDownloadCDN(dest, streamURL, track, key); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func deezerDownloadCDN(dest, streamURL string, track File, key []byte) error {
+	base, err := url.Parse(streamURL)
+	if err != nil || base.Host == "" || base.User != nil || (base.Scheme != "https" && base.Scheme != "http") {
+		return fmt.Errorf("invalid Deezer CDN URL")
+	}
+	req, err := http.NewRequest("GET", streamURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "audio/flac, */*")
 	client := &http.Client{Timeout: 10 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
-		if !strings.EqualFold(r.URL.Host, base.Host) || r.URL.Scheme != base.Scheme {
-			return fmt.Errorf("refusing Deezer credential redirect")
+		if r.URL.Scheme != base.Scheme || !deezerRedirectAllowed(base, r.URL) {
+			return fmt.Errorf("refusing Deezer CDN redirect")
 		}
 		if len(via) >= 5 {
 			return fmt.Errorf("too many redirects")
@@ -296,14 +411,14 @@ func deezerDownloadTrack(dest string, track File) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("deezer stream HTTP %d", resp.StatusCode)
+		return fmt.Errorf("deezer CDN HTTP %d", resp.StatusCode)
 	}
 	f, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
 	var received deezerByteCounter
-	err = deezerDecrypt(f, io.TeeReader(resp.Body, &received), track.Id)
+	err = deezerDecryptWithKey(f, io.TeeReader(resp.Body, &received), key)
 	closeErr := f.Close()
 	if err != nil {
 		return err

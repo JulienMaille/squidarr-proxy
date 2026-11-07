@@ -46,12 +46,35 @@ func TestDeezerDecryptStripe(t *testing.T) {
 	}
 }
 
+func deezerTestMirror(t *testing.T, audioPath string, media http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/track/123" {
+			if r.Header.Get("X-API-Key") != "test-secret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			fmt.Fprintf(w, `{"streamUrl":%q,"decryptionKey":"","codec":"flac"}`, server.URL+audioPath)
+			return
+		}
+		if r.URL.Path == audioPath {
+			media(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	return server
+}
+
 func TestDeezerRejectsInvalidAudio(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(encryptDeezerTest(make([]byte, 8192), 123)) }))
+	server := deezerTestMirror(t, "/audio/123", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(encryptDeezerTest(make([]byte, 8192), 123))
+	})
 	defer server.Close()
-	oldURL, oldKey := deezerStreamURL, DeezerAPIKey
-	defer func() { deezerStreamURL, DeezerAPIKey = oldURL, oldKey }()
-	deezerStreamURL, DeezerAPIKey = server.URL, "test-secret"
+	oldURL, oldKey := deezerMirrorURL, DeezerAPIKey
+	defer func() { deezerMirrorURL, DeezerAPIKey = oldURL, oldKey }()
+	deezerMirrorURL, DeezerAPIKey = server.URL, "test-secret"
 	if err := deezerDownloadTrack(filepath.Join(t.TempDir(), "audio.flac"), File{Id: 123, duration: 180}); err == nil {
 		t.Fatal("invalid audio accepted")
 	}
@@ -61,11 +84,13 @@ func TestDeezerBlocksCrossHostRedirect(t *testing.T) {
 	called := false
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
 	defer destination.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, http.StatusFound) }))
+	server := deezerTestMirror(t, "/audio/123", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusFound)
+	})
 	defer server.Close()
-	oldURL, oldKey := deezerStreamURL, DeezerAPIKey
-	defer func() { deezerStreamURL, DeezerAPIKey = oldURL, oldKey }()
-	deezerStreamURL, DeezerAPIKey = server.URL, "test-secret"
+	oldURL, oldKey := deezerMirrorURL, DeezerAPIKey
+	defer func() { deezerMirrorURL, DeezerAPIKey = oldURL, oldKey }()
+	deezerMirrorURL, DeezerAPIKey = server.URL, "test-secret"
 	if err := deezerDownloadTrack(filepath.Join(t.TempDir(), "audio.flac"), File{Id: 123, duration: 180}); err == nil {
 		t.Fatal("redirect accepted")
 	}
@@ -74,15 +99,49 @@ func TestDeezerBlocksCrossHostRedirect(t *testing.T) {
 	}
 }
 
+func TestDeezerRetriesTransientMirrorFailure(t *testing.T) {
+	// The live mirror answers some requests with a Cloudflare 502 while its
+	// proxy pool rotates; the next attempt usually succeeds.
+	attempts := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/track/123" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("X-API-Key") != "test-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, "error code: 502")
+			return
+		}
+		fmt.Fprintf(w, `{"streamUrl":%q,"decryptionKey":"","codec":"flac"}`, server.URL+"/audio/123")
+	}))
+	defer server.Close()
+	oldURL, oldKey := deezerMirrorURL, DeezerAPIKey
+	defer func() { deezerMirrorURL, DeezerAPIKey = oldURL, oldKey }()
+	deezerMirrorURL, DeezerAPIKey = server.URL, "test-secret"
+	if _, err := deezerStreamInfoFor(123); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
 func TestDeezerFailureNeverPromotesAlbum(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
 	defer server.Close()
-	oldURL, oldKey, oldPath, oldCategory := deezerStreamURL, DeezerAPIKey, DownloadPath, Category
+	oldURL, oldKey, oldPath, oldCategory := deezerMirrorURL, DeezerAPIKey, DownloadPath, Category
 	defer func() {
-		deezerStreamURL, DeezerAPIKey, DownloadPath, Category = oldURL, oldKey, oldPath, oldCategory
+		deezerMirrorURL, DeezerAPIKey, DownloadPath, Category = oldURL, oldKey, oldPath, oldCategory
 		delete(Downloads, "test-failure")
 	}()
-	deezerStreamURL, DeezerAPIKey, DownloadPath, Category = server.URL, "invalid", t.TempDir(), "music"
+	deezerMirrorURL, DeezerAPIKey, DownloadPath, Category = server.URL, "invalid", t.TempDir(), "music"
 	job := &Download{Id: "test-failure", FileName: "test-SQUIDWTF", numTracks: 1, Files: []File{{Id: 123, Name: "test", Index: "1", duration: 180}}}
 	Downloads[job.Id] = job
 	startDeezerDownload(job.Id)
