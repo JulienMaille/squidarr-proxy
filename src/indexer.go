@@ -240,7 +240,10 @@ func mergeProviderAlbums(sources ...[]Album) []Album {
 
 func fetchQobuzAlbums(query string, limit int, offset int, qualityParam string) []Album {
 	// Offering albums that can never be downloaded is worse than offering none.
-	if NavLink != "" && !qobuzStreamUsable() {
+	// But when a Qobuz user token or an Arcod backend is configured, Qobuz can
+	// still be searched and streamed — so only skip Qobuz when we rely solely on
+	// the Navidrums backend and it cannot stream.
+	if NavLink != "" && QobuzToken == "" && ArcodLink == "" && !qobuzStreamUsable() {
 		fmt.Println("Qobuz skipped: " + qobuzUnavailableReason())
 		return nil
 	}

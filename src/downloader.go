@@ -470,25 +470,44 @@ func generateDownloadForSource(filename string, Id string, numTracks int, qualit
 			var proxyFmt int
 			var reason string
 			link := ""
-			if NavLink != "" {
-				// Full-length Navidrums backend gets first shot; the official token
-				// may be free-tier and only serve 30 s samples.
-				var nerr error
-				link, proxyFmt, nerr = navGetStreamUrl(track.Id, quality)
-				if nerr != nil {
-					link = ""
-					reason = nerr.Error()
-					if Debug {
-						fmt.Println("Navidrums stream failed for track "+track.Name+" ("+strconv.Itoa(track.Id)+"):", nerr)
-					}
-				}
-			}
-			if link == "" {
+			if QobuzToken != "" {
+				// Official API first when we have a user token: it works even if
+				// the Navidrums backend is blocked.
 				link = qobuzGetTrackStreamUrl(track.Id, quality)
 				if link != "" {
 					official = true
 				} else if reason == "" {
 					reason = "the official API returned no stream url (token rejected or the track is not licensed)"
+				}
+			}
+			if link == "" && ArcodLink != "" {
+				// Arcod stream backend: MP3 320 (quality=5) or FLAC (quality=27),
+				// no user token required.
+				var aerr error
+				link, proxyFmt, aerr = arcodGetStreamUrl(track.Id, quality)
+				if aerr != nil {
+					link = ""
+					if reason == "" {
+						reason = aerr.Error()
+					}
+					if Debug {
+						fmt.Println("Arcod stream failed for track "+track.Name+" ("+strconv.Itoa(track.Id)+"):", aerr)
+					}
+				}
+			}
+			if link == "" && NavLink != "" {
+				// Navidrums fallback: full-length streams when the official API
+				// and Arcod cannot serve them.
+				var nerr error
+				link, proxyFmt, nerr = navGetStreamUrl(track.Id, quality)
+				if nerr != nil {
+					link = ""
+					if reason == "" {
+						reason = nerr.Error()
+					}
+					if Debug {
+						fmt.Println("Navidrums stream failed for track "+track.Name+" ("+strconv.Itoa(track.Id)+"):", nerr)
+					}
 				}
 			}
 			results[i] = resolvedTrack{track: track, link: link, proxyFmt: proxyFmt, official: official, reason: reason}
